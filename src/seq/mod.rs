@@ -186,3 +186,16 @@ pub fn split_fasta(filename: &str) -> Result<(Vec<NamedTempFile>, Vec<String>),i
     Ok((tempfile_list, seqnames))
 }
 
+pub fn mean(data: &[f64]) -> f64 {
+    data.iter().sum::<f64>() / data.len() as f64
+}
+
+pub fn std_dev(data: &[f64], mean: f64) -> f64 {
+    let variance = data.iter()
+        .map(|&value| {
+            let diff = mean - value;
+            diff * diff
+        })
+        .sum::<f64>() / data.len() as f64;
+    variance.sqrt()
+}
