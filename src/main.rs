@@ -96,7 +96,7 @@ fn main() {
                         let mut temp_seq = chunk.to_vec();
                         let mut shannon_diversity = Vec::new();
     
-                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), format!("temp_{}", index), &opt, index) {
+                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), "temp".to_string(), &opt, index) {
                             eprintln!("Processing Error: {}", e);
                             return None;
                         }
