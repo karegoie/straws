@@ -8,6 +8,8 @@ use structopt::StructOpt;
 use ndarray::prelude::*;
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
 use rayon::prelude::*;
+use tempfile::NamedTempFile;
+
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "straws", about = "Size-free Tandem Repeat analysis using Continuous Wavelet Transform and Signaling")]
@@ -38,12 +40,12 @@ struct Opt {
     threshold: f64,
 }
 
-fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqnames: &mut Vec<String>, seqname: String, opt: &Opt, index: usize)
+fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqnames: &mut Vec<String>, seqname: String, opt: &Opt)
                    -> Result<(), std::io::Error>
 {
     let cwt_iterator = cwt::CwtIterator::new(sequence, &params);
 
-    let mut file = File::create(format!("{}_{}.cwt", seqname.clone(), index)).unwrap();
+    let mut file = File::create(format!("{}", seqname)).unwrap();
     let mut length = 0;
     let mut shannon_diversity = Vec::new();
     for batch in cwt_iterator.iter() {
@@ -56,18 +58,21 @@ fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqna
         }
     }
 
-    // write shannon diversity to .ent file 
-    let mut ent = File::create(format!("{}_{}.ent", seqname.clone(), index)).unwrap();
+    // write shannon diversity to .ent file
+    let ent_file = format!("{}.ent", seqname);
+    let mut ent = File::create(ent_file).unwrap();
     for val in shannon_diversity.iter() {
         ent.write_f64::<LittleEndian>(*val).unwrap();
     }
     
-    let mut conf = File::create(format!("{}_{}.conf", seqname.clone(), index)).unwrap();
+    let conf_file = format!("{}.conf", seqname);
+    let mut conf = File::create(conf_file).unwrap();
     conf.write_all(format!("{},{}", length, opt.number).as_bytes()).unwrap();
 
     processed_seqnames.push(seqname.clone());
     return Ok(())
 }
+
 
 fn main() {
     let opt = Opt::from_args();
@@ -91,28 +96,26 @@ fn main() {
                 let chunk_size = 10000;
                 let chunks: Vec<_> = initial_seq.chunks(chunk_size).collect();
     
-                let filtered_chunks: Vec<_> = chunks.par_iter().enumerate()
-                    .filter_map(|(index, chunk)| {
+                let filtered_chunks: Vec<_> = chunks.par_iter()
+                    .filter_map(|chunk| {
                         let mut temp_seq = chunk.to_vec();
                         let mut shannon_diversity = Vec::new();
     
-                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), "temp".to_string(), &opt, index) {
+                        let temp_cwt = NamedTempFile::new().expect("Failed to create temporary file");
+                        let temp_ent = NamedTempFile::new().expect("Failed to create temporary file");
+    
+                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), temp_cwt.path().to_str().unwrap().to_string(), &opt) {
                             eprintln!("Processing Error: {}", e);
                             return None;
                         }
     
-                        let ent_file = format!("temp_{}.ent", index);
-                        let mut ent = File::open(&ent_file).unwrap();
+                        let mut ent = File::open(temp_ent.path()).unwrap();
                         loop {
                             match ent.read_f64::<LittleEndian>() {
                                 Ok(val) if val != 0.0 => shannon_diversity.push(val),
                                 _ => break,
                             }
                         }
-    
-                        std::fs::remove_file(&ent_file).unwrap();
-                        std::fs::remove_file(format!("temp_{}.cwt", index)).unwrap();
-                        std::fs::remove_file(format!("temp_{}.conf", index)).unwrap();
     
                         if seq::mean(&shannon_diversity) < opt.threshold {
                             Some(chunk.to_vec())
@@ -140,7 +143,7 @@ fn main() {
                 println!("{} processing...", seqname);
                 match seq::read_fasta_to_vec(file) {
                     Ok(mut initial_seq) => {
-                        cwt_and_process(&mut initial_seq, &params, &mut processed_seqnames, seqname, &opt, 0).expect("Processing Error");
+                        cwt_and_process(&mut initial_seq, &params, &mut processed_seqnames, seqname, &opt).expect("Processing Error");
                     }
                     Err(e) => eprintln!("Error reading tempfile {}: {}", i, e),
                 }
