@@ -41,7 +41,7 @@ struct Opt {
 }
 
 fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqnames: &mut Vec<String>, seqname: String, opt: &Opt)
-                   -> Result<(), std::io::Error>
+                   -> Result<Vec<f64>, std::io::Error>
 {
     let cwt_iterator = cwt::CwtIterator::new(sequence, &params);
 
@@ -70,9 +70,8 @@ fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqna
     conf.write_all(format!("{},{}", length, opt.number).as_bytes()).unwrap();
 
     processed_seqnames.push(seqname.clone());
-    return Ok(())
+    Ok(shannon_diversity)
 }
-
 
 fn main() {
     let opt = Opt::from_args();
@@ -99,28 +98,21 @@ fn main() {
                 let filtered_chunks: Vec<_> = chunks.par_iter()
                     .filter_map(|chunk| {
                         let mut temp_seq = chunk.to_vec();
-                        let mut shannon_diversity = Vec::new();
     
                         let temp_cwt = NamedTempFile::new().expect("Failed to create temporary file");
-                        let temp_ent = NamedTempFile::new().expect("Failed to create temporary file");
     
-                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), temp_cwt.path().to_str().unwrap().to_string(), &opt) {
-                            eprintln!("Processing Error: {}", e);
-                            return None;
-                        }
-    
-                        let mut ent = File::open(temp_ent.path()).unwrap();
-                        loop {
-                            match ent.read_f64::<LittleEndian>() {
-                                Ok(val) if val != 0.0 => shannon_diversity.push(val),
-                                _ => break,
+                        match cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), temp_cwt.path().to_str().unwrap().to_string(), &opt) {
+                            Ok(shannon_diversity) => {
+                                if seq::mean(&shannon_diversity) < opt.threshold {
+                                    Some(chunk.to_vec())
+                                } else {
+                                    None
+                                }
                             }
-                        }
-    
-                        if seq::mean(&shannon_diversity) < opt.threshold {
-                            Some(chunk.to_vec())
-                        } else {
-                            None
+                            Err(e) => {
+                                eprintln!("Processing Error: {}", e);
+                                None
+                            }
                         }
                     })
                     .collect();
