@@ -311,7 +311,7 @@ fn main() -> Result<(), std::io::Error> {
 
     let processed_seqnames = Arc::new(Mutex::new(Vec::new()));
 
-    if opt.input.ends_with(".fasta") || opt.input.ends_with(".fa") {
+    if (opt.input.ends_with(".fasta") || opt.input.ends_with(".fa")) && !opt.filter {
         process_fasta(&opt.input, &params, &processed_seqnames, &opt)?;
     } else if (opt.input.ends_with(".fastq") || opt.input.ends_with(".fq")) && opt.filter {
         let filtered = Arc::new(Mutex::new(BufWriter::new(File::create("filtered.fasta")?)));
