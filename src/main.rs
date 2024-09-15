@@ -43,8 +43,8 @@ fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqna
 {
     let cwt_iterator = cwt::CwtIterator::new(sequence, &params);
 
-
-    let mut file = File::create(format!("{}.cwt", seqname.clone())).unwrap();
+    let thread_index = rayon::current_thread_index().unwrap_or(0);
+    let mut file = File::create(format!("{}_{}.cwt", seqname.clone(), thread_index)).unwrap();
     let mut length = 0;
     let mut shannon_diversity = Vec::new();
     for batch in cwt_iterator.iter() {
@@ -58,18 +58,16 @@ fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqna
     }
 
     // write shannon diversity to .ent file
-    let mut ent = File::create(format!("{}.ent", seqname.clone())).unwrap();
+    let mut ent = File::create(format!("{}_{}.ent", seqname.clone(), thread_index)).unwrap();
     for val in shannon_diversity.iter() {
         ent.write_f64::<LittleEndian>(*val).unwrap();
     }
     
-    let mut conf = File::create(format!("{}.conf", seqname.clone())).unwrap();
+    let mut conf = File::create(format!("{}_{}.conf", seqname.clone(), thread_index)).unwrap();
     conf.write_all(format!("{},{}", length, opt.number).as_bytes()).unwrap();
-
 
     processed_seqnames.push(seqname.clone());
     return Ok(())
-
 }
 
 fn main() {
@@ -93,18 +91,19 @@ fn main() {
             Ok(initial_seq) => {
                 let chunk_size = 10000;
                 let chunks: Vec<_> = initial_seq.chunks(chunk_size).collect();
-
+    
                 let filtered_chunks: Vec<_> = chunks.par_iter()
                     .filter_map(|chunk| {
                         let mut temp_seq = chunk.to_vec();
                         let mut shannon_diversity = Vec::new();
-                        
-                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), "temp".to_string(), &opt) {
+                        let thread_index = rayon::current_thread_index().unwrap_or(0);
+    
+                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), format!("temp_{}", thread_index), &opt) {
                             eprintln!("Processing Error: {}", e);
                             return None;
                         }
-
-                        let ent_file = format!("temp_{}.ent", rayon::current_thread_index().unwrap());
+    
+                        let ent_file = format!("temp_{}.ent", thread_index);
                         let mut ent = File::open(&ent_file).unwrap();
                         loop {
                             match ent.read_f64::<LittleEndian>() {
@@ -112,10 +111,10 @@ fn main() {
                                 _ => break,
                             }
                         }
-
+    
                         std::fs::remove_file(&ent_file).unwrap();
-                        std::fs::remove_file(format!("temp_{}.cwt", rayon::current_thread_index().unwrap())).unwrap();
-
+                        std::fs::remove_file(format!("temp_{}.cwt", thread_index)).unwrap();
+    
                         if seq::mean(&shannon_diversity) < opt.threshold {
                             Some(chunk.to_vec())
                         } else {
@@ -123,11 +122,12 @@ fn main() {
                         }
                     })
                     .collect();
-
+    
                 for chunk in filtered_chunks {
                     filtered.write_all(&chunk).expect("Error writing to filtered file");
                 }
             }
+    
             Err(e) => eprintln!("Error reading input file: {}", e),
         }
         return;
