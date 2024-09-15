@@ -202,18 +202,22 @@ fn process_fastq<P: AsRef<Path> + Sync>(
             if seq_end == chunk.len() {
                 break;
             }
-            let seq = String::from_utf8_lossy(&chunk[current_pos..seq_end]).into_owned();
+            let seq = chunk[current_pos..seq_end].to_vec();
             current_pos = seq_end + 1;
 
-            // Skip the '+' line and quality score line
-            for _ in 0..2 {
-                while current_pos < chunk.len() && chunk[current_pos] != b'\n' {
-                    current_pos += 1;
-                }
+            // Skip the '+' line
+            while current_pos < chunk.len() && chunk[current_pos] != b'\n' {
                 current_pos += 1;
             }
+            current_pos += 1;
+
+            // Skip the quality score line
+            while current_pos < chunk.len() && chunk[current_pos] != b'\n' {
+                current_pos += 1;
+            }
+            current_pos += 1;
             
-            if let Err(e) = process_sequence_with_id(id, seq.into_bytes(), params, processed_seqnames, opt, filtered) {
+            if let Err(e) = process_sequence_with_id(id, seq, params, processed_seqnames, opt, filtered) {
                 eprintln!("Error processing sequence: {}", e);
             }
             
