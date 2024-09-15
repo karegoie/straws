@@ -130,6 +130,7 @@ fn main() {
             }
             Err(e) => eprintln!("Error reading input file: {}", e),
         }
+        return;
     }
 
     // let (mut initial_seq, seqname) : (Vec<u8>, String) = seq::read_fasta_to_vec(opt.input.as_str()).unwrap();
