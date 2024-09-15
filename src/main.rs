@@ -203,7 +203,15 @@ fn process_fastq<P: AsRef<Path> + Sync>(
         let mut current_pos = 0;
         while current_pos < chunk.len() {
             // Read the ID line
-            let mut id_end = current_pos;
+            if chunk[current_pos] != b'@' {
+                // Skip invalid records
+                while current_pos < chunk.len() && chunk[current_pos] != b'\n' {
+                    current_pos += 1;
+                }
+                current_pos += 1;
+                continue;
+            }
+            let mut id_end = current_pos + 1;
             while id_end < chunk.len() && chunk[id_end] != b'\n' {
                 id_end += 1;
             }
@@ -225,16 +233,28 @@ fn process_fastq<P: AsRef<Path> + Sync>(
             current_pos = seq_end + 1;
 
             // Skip the '+' line
-            while current_pos < chunk.len() && chunk[current_pos] != b'\n' {
+            if current_pos < chunk.len() && chunk[current_pos] == b'+' {
+                while current_pos < chunk.len() && chunk[current_pos] != b'\n' {
+                    current_pos += 1;
+                }
                 current_pos += 1;
+            } else {
+                // Invalid record, skip to next '@'
+                while current_pos < chunk.len() && chunk[current_pos] != b'@' {
+                    current_pos += 1;
+                }
+                continue;
             }
-            current_pos += 1;
 
             // Skip the quality score line
-            while current_pos < chunk.len() && chunk[current_pos] != b'\n' {
-                current_pos += 1;
+            let mut qual_end = current_pos;
+            while qual_end < chunk.len() && chunk[qual_end] != b'\n' {
+                qual_end += 1;
             }
-            current_pos += 1;
+            if qual_end == chunk.len() {
+                break;
+            }
+            current_pos = qual_end + 1;
             
             if let Err(e) = process_sequence_with_id(id, seq, params, processed_seqnames, opt, filtered) {
                 eprintln!("Error processing sequence: {}", e);
