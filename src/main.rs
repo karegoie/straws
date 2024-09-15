@@ -1,18 +1,15 @@
 use std::fs::File;
-use std::io::Write;
-
+use std::io::{Write, BufReader, BufRead, SeekFrom, Seek};
+use std::path::Path;
 use strauws::cwt;
 use strauws::seq;
-
 use structopt::StructOpt;
 use ndarray::prelude::*;
 use byteorder::{LittleEndian, WriteBytesExt};
 use rayon::prelude::*;
 use tempfile::NamedTempFile;
 use std::sync::{Arc, Mutex};
-use sys_info::mem_info;
-
-const GB: u64 = 1024 * 1024 * 1024;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "straws", about = "Size-free Tandem Repeat analysis using Continuous Wavelet Transform and Signaling")]
@@ -44,17 +41,17 @@ struct Opt {
 }
 
 fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, seqname: String, opt: &Opt)
-                   -> Result<Option<Vec<f64>>, std::io::Error>
+                   -> Result<Option<f64>, std::io::Error>
 {                   
     let cwt_iterator = cwt::CwtIterator::new(sequence, &params);
 
-    let mut file = File::create(format!("{}", seqname)).unwrap();  
+    let mut file = File::create(format!("{}", seqname))?;  
     let mut length = 0;
     let mut shannon_diversity = Vec::new();
     for batch in cwt_iterator.iter() {
         for row in batch.axis_iter(Axis(1)) {
             for val in row.iter() {
-                file.write_f64::<LittleEndian>(*val).unwrap();      
+                file.write_f64::<LittleEndian>(*val)?;      
             }
             shannon_diversity.push(seq::calculate_shannon_diversity_for_vector(&row.to_vec()));
             length += 1;
@@ -63,30 +60,136 @@ fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqna
 
     // write shannon diversity to .ent file  
     let ent_file = format!("{}.ent", seqname);
-    let mut ent = File::create(ent_file).unwrap();
+    let mut ent = File::create(ent_file)?;
     for val in shannon_diversity.iter() {
-        ent.write_f64::<LittleEndian>(*val).unwrap();
+        ent.write_f64::<LittleEndian>(*val)?;
     }
     
     let conf_file = format!("{}.conf", seqname);  
-    let mut conf = File::create(conf_file).unwrap();    
-    conf.write_all(format!("{},{}", length, opt.number).as_bytes()).unwrap();
+    let mut conf = File::create(conf_file)?;    
+    conf.write_all(format!("{},{}", length, opt.number).as_bytes())?;
 
     processed_seqnames.lock().unwrap().push(seqname.clone());
 
     if opt.filter {
-        Ok(Some(shannon_diversity))  
+        Ok(Some(shannon_diversity.iter().sum::<f64>() / shannon_diversity.len() as f64))
     } else {
         Ok(None)
     }
 }
 
-fn main() {
+fn process_sequence(seq: Vec<u8>, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<File>>, record_counter: &Arc<AtomicUsize>) -> Result<(), std::io::Error> {
+    let temp_cwt = NamedTempFile::new()?;
+    let mut seq_copy = seq.clone();
+    
+    match cwt_and_process(&mut seq_copy, params, processed_seqnames, temp_cwt.path().to_str().unwrap().to_string(), opt) {
+        Ok(Some(shannon_diversity_avg)) => {
+            let threshold = opt.threshold.unwrap();
+            if shannon_diversity_avg < threshold {
+                let id = record_counter.fetch_add(1, Ordering::SeqCst);
+                let mut filtered_lock = filtered.lock().unwrap();
+                writeln!(filtered_lock, ">{}", id)?;
+                filtered_lock.write_all(&seq)?;
+                writeln!(filtered_lock)?;
+            }
+        },
+        Ok(None) => {},
+        Err(e) => eprintln!("Processing Error: {}", e),
+    }
+    
+    Ok(())
+}
+
+fn process_fasta<P: AsRef<Path>>(path: P, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<File>>, record_counter: &Arc<AtomicUsize>) -> Result<(), std::io::Error> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut current_seq = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.starts_with('>') {
+            if !current_seq.is_empty() {
+                process_sequence(current_seq, params, processed_seqnames, opt, filtered, record_counter)?;
+                current_seq = Vec::new();
+            }
+        } else {
+            current_seq.extend(line.bytes());
+        }
+    }
+
+    if !current_seq.is_empty() {
+        process_sequence(current_seq, params, processed_seqnames, opt, filtered, record_counter)?;
+    }
+
+    Ok(())
+}
+fn process_fastq_chunk(chunk: Vec<String>, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<File>>, record_counter: &Arc<AtomicUsize>) -> Result<(), std::io::Error> {
+    for seq in chunk.into_iter() {
+        process_sequence(seq.into_bytes(), params, processed_seqnames, opt, filtered, record_counter)?;
+    }
+    Ok(())
+}
+
+fn process_fastq<P: AsRef<Path> + Sync>(path: P, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<File>>, record_counter: &Arc<AtomicUsize>) -> Result<(), std::io::Error> {
+    let file = File::open(&path)?;
+    let mut reader = BufReader::new(file);
+    
+    let num_cpus = sys_info::cpu_num().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))? as usize;
+    
+    let file_size = reader.seek(SeekFrom::End(0))?;
+    reader.seek(SeekFrom::Start(0))?;
+    
+    let chunk_size = file_size / num_cpus as u64;
+    
+    let mut start_positions = vec![0u64];
+    for i in 1..num_cpus {
+        let mut pos = i as u64 * chunk_size;
+        reader.seek(SeekFrom::Start(pos))?;
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        pos = reader.seek(SeekFrom::Current(0))?;
+        while !line.starts_with('@') {
+            reader.read_line(&mut line)?;
+            pos = reader.seek(SeekFrom::Current(0))?;
+        }
+        start_positions.push(pos);
+    }
+    start_positions.push(file_size);
+    
+    start_positions.par_windows(2).map(|window| {
+        let start = window[0];
+        let end = window[1];
+        let mut chunk_reader = BufReader::new(File::open(&path)?);
+        chunk_reader.seek(SeekFrom::Start(start))?;
+        let mut chunk = Vec::new();
+        let mut current_pos = start;
+        
+        while current_pos < end {
+            let mut seq = String::new();
+            chunk_reader.read_line(&mut seq)?;  // Read sequence
+            if seq.is_empty() {
+                break;
+            }
+            chunk_reader.read_line(&mut String::new())?;  // Skip '+' line
+            chunk_reader.read_line(&mut String::new())?;  // Skip quality line
+            chunk_reader.read_line(&mut String::new())?;  // Skip name line of next record
+            
+            chunk.push(seq.trim().to_string());
+            current_pos = chunk_reader.seek(SeekFrom::Current(0))?;
+        }
+        
+        process_fastq_chunk(chunk, params, processed_seqnames, opt, filtered, record_counter)
+    }).collect::<Result<(), std::io::Error>>()?;
+
+    Ok(())
+}
+
+fn main() -> Result<(), std::io::Error> {
     let opt = Opt::from_args();
     let start = opt.start as f64;
     let end = opt.end as f64;  
     let num = opt.number; 
-    let t_values = cwt::linspace(start * 10.0, end * 10.0, num).to_vec(); // wavelet is range (-5, 5, wavelet_length) , so multiply by 10
+    let t_values = cwt::linspace(start * 10.0, end * 10.0, num).to_vec();
 
     let params = cwt::Params {
         num,  
@@ -94,125 +197,27 @@ fn main() {
         t_values, 
     };
 
-    let mem = mem_info().unwrap(); 
-    let available_mem_gb = mem.avail / GB;
-    let chunk_size = if available_mem_gb >= 500 {
-        1_000_000_000 // 1GB chunk for systems with >= 500GB RAM
-    } else if available_mem_gb >= 300 {
-        750_000_000 // 750MB chunk for systems with 300-499GB RAM
-    } else if available_mem_gb >= 200 {
-        500_000_000 // 500MB chunk for systems with 200-299GB RAM  
-    } else if available_mem_gb >= 100 {
-        250_000_000 // 250MB chunk for systems with 100-199GB RAM
-    } else if available_mem_gb > 16 { 
-        100_000_000 // 100MB chunk for systems with > 16GB RAM
-    } else if available_mem_gb > 8 {
-        50_000_000 // 50MB chunk for systems with 8-16GB RAM
-    } else {  
-        10_000_000 // 10MB chunk for systems with <= 8GB RAM  
-    };
-
     let processed_seqnames = Arc::new(Mutex::new(Vec::new()));
+    let record_counter = Arc::new(AtomicUsize::new(1));
+    let filtered = Arc::new(Mutex::new(File::create("filtered.fasta")?));
 
-    if opt.filter {
-        let filtered = Arc::new(Mutex::new(File::create("filtered.fasta").expect("Error creating filtered file")));
-
-        if opt.input.ends_with(".fasta") || opt.input.ends_with(".fa") {
-            match seq::split_fasta(opt.input.as_str()) {
-                Ok((tempfile_list, seqnames)) => {
-                    tempfile_list.par_iter().zip(seqnames.par_iter())
-                        .filter_map(|(file, seqname)| {
-                            println!("{} processing...", seqname);
-                            let mut initial_seq = seq::read_fasta_to_vec(file).expect("Error reading tempfile");
-                            
-                            match cwt_and_process(&mut initial_seq, &params, &processed_seqnames, seqname.to_string(), &opt) {
-                                Ok(Some(shannon_diversity)) => {
-                                    let thres = opt.threshold.unwrap();
-                                    if (shannon_diversity.iter().sum::<f64>() / shannon_diversity.len() as f64) < thres {
-                                        Some(initial_seq)  
-                                    } else {
-                                        None
-                                    }
-                                },
-                                Ok(None) => None,
-                                Err(e) => { 
-                                    eprintln!("Processing Error: {}", e);
-                                    None
-                                }
-                            }
-                        })
-                        .for_each(|seq| {
-                            filtered.lock().unwrap().write_all(&seq).expect("Error writing to filtered file"); 
-                        });
-                },
-                Err(e) => eprintln!("Error splitting FASTA file: {}", e),
-            }
-        } else if opt.input.ends_with(".fastq") || opt.input.ends_with(".fq") {
-            match seq::read_fastq_to_vec(opt.input.as_str(), chunk_size) {
-                Ok(chunks) => {
-                    chunks.par_iter()
-                        .filter_map(|chunk| {
-                            let temp_cwt = NamedTempFile::new().expect("Failed to create temporary file");
-    
-                            let mut chunk_copy = chunk.clone();
-                            match cwt_and_process(&mut chunk_copy, &params, &processed_seqnames, temp_cwt.path().to_str().unwrap().to_string(), &opt) {
-                                Ok(Some(shannon_diversity)) => {
-                                    let thres = opt.threshold.unwrap();
-                                    if (shannon_diversity.iter().sum::<f64>() / shannon_diversity.len() as f64)< thres {
-                                        Some(chunk.clone())  
-                                    } else {
-                                        None
-                                    }  
-                                },
-                                Ok(None) => None,
-                                Err(e) => {
-                                    eprintln!("Processing Error: {}", e);
-                                    None
-                                }
-                            }
-                        })  
-                        .for_each(|chunk| {
-                            filtered.lock().unwrap().write_all(&chunk).expect("Error writing to filtered file");
-                        });
-                }
-                Err(e) => eprintln!("Error reading FASTQ file: {}", e),
-            }
-        }
+    if opt.input.ends_with(".fasta") || opt.input.ends_with(".fa") {
+        process_fasta(&opt.input, &params, &processed_seqnames, &opt, &filtered, &record_counter)?;
+    } else if opt.input.ends_with(".fastq") || opt.input.ends_with(".fq") {
+        process_fastq(&opt.input, &params, &processed_seqnames, &opt, &filtered, &record_counter)?;
     } else {
-        if opt.input.ends_with(".fasta") {
-            match seq::split_fasta(opt.input.as_str()) {
-                Ok((tempfile_list, seqnames)) => {
-                    tempfile_list.par_iter().zip(seqnames.par_iter())
-                        .for_each(|(file, seqname)| {
-                            println!("{} processing...", seqname);
-                            let mut initial_seq = seq::read_fasta_to_vec(file).expect("Error reading tempfile");
-                            cwt_and_process(&mut initial_seq, &params, &processed_seqnames, seqname.to_string(), &opt).expect("Processing Error");
-                        });
-                },
-                Err(e) => eprintln!("Error splitting FASTA file: {}", e),
-            }
-        } else if opt.input.ends_with(".fastq") {
-            match seq::read_fastq_to_vec(opt.input.as_str(), chunk_size) {
-                Ok(chunks) => {
-                    chunks.par_iter()
-                        .for_each(|chunk| {
-                            let temp_cwt = NamedTempFile::new().expect("Failed to create temporary file");
-                            let mut chunk_copy = chunk.clone();
-                            cwt_and_process(&mut chunk_copy, &params, &processed_seqnames, temp_cwt.path().to_str().unwrap().to_string(), &opt).expect("Processing Error");
-                        });
-                }
-                Err(e) => eprintln!("Error reading FASTQ file: {}", e),
-            }
-        }
+        eprintln!("Unsupported file format. Please use .fasta, .fa, .fastq, or .fq files.");
+        return Ok(());
     }
-}
 
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     
     #[test]  
     fn test_main() {
-        main();
+        main().unwrap();
     }
 }
