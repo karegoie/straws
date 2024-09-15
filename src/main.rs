@@ -38,13 +38,12 @@ struct Opt {
     threshold: f64,
 }
 
-fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqnames: &mut Vec<String>, seqname: String, opt: &Opt)
+fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqnames: &mut Vec<String>, seqname: String, opt: &Opt, index: usize)
                    -> Result<(), std::io::Error>
 {
     let cwt_iterator = cwt::CwtIterator::new(sequence, &params);
 
-    let thread_index = rayon::current_thread_index().unwrap_or(0);
-    let mut file = File::create(format!("{}_{}.cwt", seqname.clone(), thread_index)).unwrap();
+    let mut file = File::create(format!("{}_{}.cwt", seqname.clone(), index)).unwrap();
     let mut length = 0;
     let mut shannon_diversity = Vec::new();
     for batch in cwt_iterator.iter() {
@@ -57,13 +56,13 @@ fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqna
         }
     }
 
-    // write shannon diversity to .ent file
-    let mut ent = File::create(format!("{}_{}.ent", seqname.clone(), thread_index)).unwrap();
+    // write shannon diversity to .ent file 
+    let mut ent = File::create(format!("{}_{}.ent", seqname.clone(), index)).unwrap();
     for val in shannon_diversity.iter() {
         ent.write_f64::<LittleEndian>(*val).unwrap();
     }
     
-    let mut conf = File::create(format!("{}_{}.conf", seqname.clone(), thread_index)).unwrap();
+    let mut conf = File::create(format!("{}_{}.conf", seqname.clone(), index)).unwrap();
     conf.write_all(format!("{},{}", length, opt.number).as_bytes()).unwrap();
 
     processed_seqnames.push(seqname.clone());
@@ -92,18 +91,17 @@ fn main() {
                 let chunk_size = 10000;
                 let chunks: Vec<_> = initial_seq.chunks(chunk_size).collect();
     
-                let filtered_chunks: Vec<_> = chunks.par_iter()
-                    .filter_map(|chunk| {
+                let filtered_chunks: Vec<_> = chunks.par_iter().enumerate()
+                    .filter_map(|(index, chunk)| {
                         let mut temp_seq = chunk.to_vec();
                         let mut shannon_diversity = Vec::new();
-                        let thread_index = rayon::current_thread_index().unwrap_or(0);
     
-                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), format!("temp_{}", thread_index), &opt) {
+                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), format!("temp_{}", index), &opt, 0) {
                             eprintln!("Processing Error: {}", e);
                             return None;
                         }
     
-                        let ent_file = format!("temp_{}.ent", thread_index);
+                        let ent_file = format!("temp_{}.ent", index);
                         let mut ent = File::open(&ent_file).unwrap();
                         loop {
                             match ent.read_f64::<LittleEndian>() {
@@ -113,7 +111,7 @@ fn main() {
                         }
     
                         std::fs::remove_file(&ent_file).unwrap();
-                        std::fs::remove_file(format!("temp_{}.cwt", thread_index)).unwrap();
+                        std::fs::remove_file(format!("temp_{}.cwt", index)).unwrap();
     
                         if seq::mean(&shannon_diversity) < opt.threshold {
                             Some(chunk.to_vec())
@@ -127,7 +125,6 @@ fn main() {
                     filtered.write_all(&chunk).expect("Error writing to filtered file");
                 }
             }
-    
             Err(e) => eprintln!("Error reading input file: {}", e),
         }
         return;
@@ -142,7 +139,7 @@ fn main() {
                 println!("{} processing...", seqname);
                 match seq::read_fasta_to_vec(file) {
                     Ok(mut initial_seq) => {
-                        cwt_and_process(&mut initial_seq, &params, &mut processed_seqnames, seqname, &opt).expect("Processing Error");
+                        cwt_and_process(&mut initial_seq, &params, &mut processed_seqnames, seqname, &opt, 0).expect("Processing Error");
                     }
                     Err(e) => eprintln!("Error reading tempfile {}: {}", i, e),
                 }
