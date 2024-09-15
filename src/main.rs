@@ -142,6 +142,7 @@ fn process_fastq<P: AsRef<Path> + Sync>(path: P, params: &cwt::Params, processed
     let mut reader = BufReader::new(file);
     
     let num_cpus = sys_info::cpu_num().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))? as usize;
+    println!("Detected {} CPUs", num_cpus);
     
     let file_size = reader.seek(SeekFrom::End(0))?;
     reader.seek(SeekFrom::Start(0))?;
