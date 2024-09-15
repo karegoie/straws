@@ -91,7 +91,7 @@ fn main() {
     
         match seq::read_fastq_to_vec(opt.input.as_str()) {
             Ok(initial_seq) => {
-                let chunk_size = 1000;
+                let chunk_size = 10000;
                 let chunks: Vec<_> = initial_seq.chunks(chunk_size).collect();
 
                 let filtered_chunks: Vec<_> = chunks.par_iter()
