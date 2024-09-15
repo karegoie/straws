@@ -6,7 +6,7 @@ use strauws::seq;
 
 use structopt::StructOpt;
 use ndarray::prelude::*;
-use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
+use byteorder::{LittleEndian, WriteBytesExt};
 use rayon::prelude::*;
 use tempfile::NamedTempFile;
 
