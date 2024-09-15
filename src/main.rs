@@ -313,7 +313,7 @@ fn main() -> Result<(), std::io::Error> {
 
     if opt.input.ends_with(".fasta") || opt.input.ends_with(".fa") {
         process_fasta(&opt.input, &params, &processed_seqnames, &opt)?;
-    } else if opt.input.ends_with(".fastq") || opt.input.ends_with(".fq") {
+    } else if (opt.input.ends_with(".fastq") || opt.input.ends_with(".fq")) && opt.filter {
         let filtered = Arc::new(Mutex::new(BufWriter::new(File::create("filtered.fasta")?)));
         process_fastq(&opt.input, &params, &processed_seqnames, &opt, &filtered)?;
     } else {
