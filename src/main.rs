@@ -7,6 +7,7 @@ use strauws::seq;
 use structopt::StructOpt;
 use ndarray::prelude::*;
 use byteorder::{LittleEndian, WriteBytesExt, ReadBytesExt};
+use rayon::prelude::*;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "straws", about = "Size-free Tandem Repeat analysis using Continuous Wavelet Transform and Signaling")]
@@ -86,38 +87,49 @@ fn main() {
 
 
     if opt.filter {
-        // filter the single given fastq file (not using split fasta function)
-        // read fastq file with `read_fastq_to_vec` function
-        // cwt each of the fastq reads if the read is longer than wavelet size
-        // wavelet sizes are given by option -s and -e
-        // if the mean shannon diversity of cwt is smaller than threshold, redirect it to output file (filtered.fasta)
-        // with the id as sequential integars
-        // TODO: implement this
-        let mut filtered = File::create("filtered.fasta").unwrap();
+        let mut filtered = File::create("filtered.fasta").expect("Error creating filtered file");
+    
         match seq::read_fastq_to_vec(opt.input.as_str()) {
-            Ok(mut initial_seq) => {
-                cwt_and_process(&mut initial_seq, &params, &mut Vec::new(), "filtered".to_string(), &opt).expect("Processing Error");
-                // open the .ent file and check the mean shannon diversity
-                // if the mean shannon diversity is smaller than threshold, write the sequence to the output file
-                let mut ent = File::open("filtered.ent").unwrap();
-                let mut shannon_diversity = Vec::new();
-                {
-                    let mut val = ent.read_f64::<LittleEndian>().unwrap();
-                    while val != 0.0 {
-                        shannon_diversity.push(val);
-                        val = ent.read_f64::<LittleEndian>().unwrap();
-                    }
-                }
-                if seq::mean(&shannon_diversity) < opt.threshold {
-                    filtered.write_all(&initial_seq).unwrap();
+            Ok(initial_seq) => {
+                let chunk_size = 1000;
+                let chunks: Vec<_> = initial_seq.chunks(chunk_size).collect();
+
+                let filtered_chunks: Vec<_> = chunks.par_iter()
+                    .filter_map(|chunk| {
+                        let mut temp_seq = chunk.to_vec();
+                        let mut shannon_diversity = Vec::new();
+                        
+                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), "temp".to_string(), &opt) {
+                            eprintln!("Processing Error: {}", e);
+                            return None;
+                        }
+
+                        let ent_file = format!("temp_{}.ent", rayon::current_thread_index().unwrap());
+                        let mut ent = File::open(&ent_file).unwrap();
+                        loop {
+                            match ent.read_f64::<LittleEndian>() {
+                                Ok(val) if val != 0.0 => shannon_diversity.push(val),
+                                _ => break,
+                            }
+                        }
+
+                        std::fs::remove_file(&ent_file).unwrap();
+                        std::fs::remove_file(format!("temp_{}.cwt", rayon::current_thread_index().unwrap())).unwrap();
+
+                        if seq::mean(&shannon_diversity) < opt.threshold {
+                            Some(chunk.to_vec())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                for chunk in filtered_chunks {
+                    filtered.write_all(&chunk).expect("Error writing to filtered file");
                 }
             }
             Err(e) => eprintln!("Error reading input file: {}", e),
         }
-        // remove the temporary files
-        std::fs::remove_file("filtered.cwt").unwrap();
-        std::fs::remove_file("filtered.ent").unwrap();
-        return;
     }
 
     // let (mut initial_seq, seqname) : (Vec<u8>, String) = seq::read_fasta_to_vec(opt.input.as_str()).unwrap();
