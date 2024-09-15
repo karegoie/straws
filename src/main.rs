@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Write, BufReader};
+use std::io::Write;
 
 use strauws::cwt;
 use strauws::seq;
@@ -45,38 +45,17 @@ fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqna
 
     let mut file = File::create(format!("{}.cwt", seqname.clone())).unwrap();
     let mut length = 0;
+    let mut shannon_diversity = Vec::new();
     for batch in cwt_iterator.iter() {
         for row in batch.axis_iter(Axis(1)) {
             for val in row.iter() {
                 file.write_f64::<LittleEndian>(*val).unwrap();
             }
+            shannon_diversity.push(seq::calculate_shannon_diversity_for_vector(&row.to_vec()));
             length += 1;
         }
     }
 
-    // generate list of shannon diversity of length of cwt by reading .cwt file
-    let mut shannon_diversity = Vec::new();
-    let cwt_file = File::open(format!("{}.cwt", seqname.clone())).unwrap();
-    let mut reader = BufReader::new(cwt_file);
-
-    for _ in 0..length {
-        let mut row_data = Vec::new();
-        for _ in 0..sequence.len() {
-            let value = reader.read_f64::<LittleEndian>().unwrap();
-            row_data.push(value);
-        }
-        
-        let mean = seq::mean(&row_data);
-        let std_dev = seq::std_dev(&row_data, mean);
-        
-        let entropy: f64 = row_data.iter().map(|&x| {
-            let p = (x - mean) / std_dev;
-            let p_density = (-0.5 * p * p).exp() / (std_dev * (2.0 * std::f64::consts::PI).sqrt());
-            -p_density * p_density.ln()
-        }).sum::<f64>().abs() / (row_data.len() as f64);
-        
-        shannon_diversity.push(entropy);
-    }
     // write shannon diversity to .ent file
     let mut ent = File::create(format!("{}.ent", seqname.clone())).unwrap();
     for val in shannon_diversity.iter() {
@@ -107,13 +86,40 @@ fn main() {
 
 
     if opt.filter {
-        // filter the fastq file
-        // read fastq file
+        // filter the single given fastq file (not using split fasta function)
+        // read fastq file with `read_fastq_to_vec` function
         // cwt each of the fastq reads if the read is longer than wavelet size
         // wavelet sizes are given by option -s and -e
-        // if the shannon diversity of cwt is smaller than threshold, redirect it to output file
+        // if the mean shannon diversity of cwt is smaller than threshold, redirect it to output file (filtered.fasta)
+        // with the id as sequential integars
         // TODO: implement this
+        let mut filtered = File::create("filtered.fasta").unwrap();
+        match seq::read_fastq_to_vec(opt.input.as_str()) {
+            Ok(mut initial_seq) => {
+                cwt_and_process(&mut initial_seq, &params, &mut Vec::new(), "filtered".to_string(), &opt).expect("Processing Error");
+                // open the .ent file and check the mean shannon diversity
+                // if the mean shannon diversity is smaller than threshold, write the sequence to the output file
+                let mut ent = File::open("filtered.ent").unwrap();
+                let mut shannon_diversity = Vec::new();
+                {
+                    let mut val = ent.read_f64::<LittleEndian>().unwrap();
+                    while val != 0.0 {
+                        shannon_diversity.push(val);
+                        val = ent.read_f64::<LittleEndian>().unwrap();
+                    }
+                }
+                if seq::mean(&shannon_diversity) < opt.threshold {
+                    filtered.write_all(&initial_seq).unwrap();
+                }
+            }
+            Err(e) => eprintln!("Error reading input file: {}", e),
+        }
+        // remove the temporary files
+        std::fs::remove_file("filtered.cwt").unwrap();
+        std::fs::remove_file("filtered.ent").unwrap();
+        return;
     }
+
     // let (mut initial_seq, seqname) : (Vec<u8>, String) = seq::read_fasta_to_vec(opt.input.as_str()).unwrap();
     match seq::split_fasta(opt.input.as_str()) {
         Ok((tempfile_list, seqnames)) => {

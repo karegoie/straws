@@ -1,6 +1,5 @@
 use std::fs::File;
-use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::{self, Read, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use num_complex::Complex;
 use rayon::prelude::*;
 use tempfile::NamedTempFile;
@@ -43,6 +42,37 @@ pub fn read_fasta_to_vec(file: &NamedTempFile) -> Result<Vec<u8>, io::Error>
 
     Ok(sequence)
 }
+
+pub fn read_fastq_to_vec(file: &str) -> Result<Vec<u8>, io::Error> {
+    let file = File::open(file).expect("file opening error");
+    let reader = BufReader::new(file);
+    let mut sequences = Vec::new();
+    let mut lines = reader.lines().enumerate();
+
+    while let Some((i, line_result)) = lines.next() {
+        let line = line_result?;
+        
+        // Every 4th line (0-indexed) is the start of a new record
+        if i % 4 == 0 {
+            if !line.starts_with('@') {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Malformed FASTQ: ID line doesn't start with @"));
+            }
+            // Skip to the next line, which contains the sequence
+            if let Some((_, seq_result)) = lines.next() {
+                let seq = seq_result?;
+                sequences.extend(seq.bytes());
+            } else {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Malformed FASTQ: unexpected end of file"));
+            }
+            // Skip the '+' line and quality score line
+            lines.next();
+            lines.next();
+        }
+    }
+
+    Ok(sequences)
+}
+
 pub fn transpose(matrix: Vec<Vec<f64>>) -> Vec<Vec<f64>> {
     if matrix.is_empty() || matrix[0].is_empty() {
         return vec![]; 
@@ -61,92 +91,6 @@ pub fn transpose(matrix: Vec<Vec<f64>>) -> Vec<Vec<f64>> {
     }
 
     transposed
-}
-
-pub fn read_endian(file_path: String, ncols: usize) -> Result<Vec<Vec<f64>>, io::Error> {
-    let file = File::open(file_path)?;
-    let mut reader = BufReader::new(file);
-    let mut buffer = vec![];
-
-    // Read the entire file into the buffer
-    reader.read_to_end(&mut buffer)?;
-
-    let nrows = buffer.len() / (ncols * 8);
-    let mut matrix = Vec::with_capacity(nrows);
-
-    let mut offset = 0;
-    while offset + 8 * ncols <= buffer.len() {
-        let mut row = Vec::with_capacity(ncols);
-        for _ in 0..ncols {
-            if offset + 8 > buffer.len() {
-                break;
-            }
-            // Read f64 directly from buffer in little-endian format
-            let value = (&buffer[offset..offset+8]).read_f64::<LittleEndian>()?;
-            row.push(value);
-            offset += 8;
-        }
-        matrix.push(row);
-    }
-
-    Ok(transpose(matrix))
-}
-
-
-pub fn parse_and_encode_gff(file_path: &String, seqname: String, length: usize) -> Vec<f64> {
-    let chromosome_length = length;
-    let mut genome_array = vec![false; chromosome_length];
-
-    if let Ok(file) = File::open(file_path) {
-        for line in io::BufReader::new(file).lines() {
-            if let Ok(record) = line {
-                if record.starts_with('#') {
-                    continue;
-                }
-                let columns: Vec<&str> = record.split('\t').collect();
-                if columns.len() != 9 || columns[0] != seqname {
-                    continue;
-                }
-
-                let start: usize = columns[3].parse().unwrap_or(0);
-                let end: usize = columns[4].parse().unwrap_or(0);
-                let feature = columns[2];
-
-                match feature {
-                    "exon" => {
-                        for i in start - 1..end {
-                            genome_array[i] = true;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    genome_array.iter().map(|&n| if n { 1.0 } else {0.0}).collect()
-}
-
-pub fn calculate_histograms(cwt_matrix: Vec<Vec<f64>>, bin_count: usize) -> Vec<usize> {
-    let bin_edges: Vec<f64> = (0..bin_count).map(|x| x as f64 / (bin_count as f64 - 1.0)).collect();
-
-    let histograms: Vec<usize> = cwt_matrix.par_iter()
-        .flat_map(|row| {
-            let mut histogram = vec![0; bin_count - 1];
-            
-            for &value in row.iter() {
-                for j in 0..bin_edges.len() - 1 {
-                    if value >= bin_edges[j] && value < bin_edges[j + 1] {
-                        histogram[j] += 1;
-                        break;
-                    }
-                }
-            }
-
-            histogram
-        })
-        .collect();
-
-    histograms
 }
 
 pub fn split_fasta(filename: &str) -> Result<(Vec<NamedTempFile>, Vec<String>),io::Error> {
@@ -190,7 +134,7 @@ pub fn mean(data: &[f64]) -> f64 {
     data.iter().sum::<f64>() / data.len() as f64
 }
 
-pub fn std_dev(data: &[f64], mean: f64) -> f64 {
+fn std_dev(data: &[f64], mean: f64) -> f64 {
     let variance = data.iter()
         .map(|&value| {
             let diff = mean - value;
@@ -198,4 +142,17 @@ pub fn std_dev(data: &[f64], mean: f64) -> f64 {
         })
         .sum::<f64>() / data.len() as f64;
     variance.sqrt()
+}
+
+pub fn calculate_shannon_diversity_for_vector(sequence: &[f64]) -> f64 {
+    let mean = mean(sequence);
+    let std_dev = std_dev(sequence, mean);
+    
+    let entropy: f64 = sequence.iter().map(|&x| {
+        let p = (x - mean) / std_dev;
+        let p_density = (-0.5 * p * p).exp() / (std_dev * (2.0 * std::f64::consts::PI).sqrt());
+        -p_density * p_density.ln()
+    }).sum::<f64>().abs() / (sequence.len() as f64);
+    
+    entropy
 }
