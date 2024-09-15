@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Write, BufReader, BufRead};
+use std::io::{Write, BufReader, BufRead, BufWriter};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -82,51 +82,70 @@ fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqna
     }
 }
 
-fn process_sequence(seq: Vec<u8>, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<File>>, record_counter: &Arc<AtomicUsize>) -> Result<(), std::io::Error> {
-    let temp_cwt = NamedTempFile::new()?;
-    let mut seq_copy = seq.clone();
-    
-    match cwt_and_process(&mut seq_copy, params, processed_seqnames, temp_cwt.path().to_str().unwrap().to_string(), opt) {
-        Ok(Some(shannon_diversity_avg)) => {
-            let threshold = opt.threshold.unwrap();
-            if shannon_diversity_avg < threshold {
-                let id = record_counter.fetch_add(1, Ordering::SeqCst);
-                let mut filtered_lock = filtered.lock().unwrap();
-                writeln!(filtered_lock, ">{}", id)?;
-                filtered_lock.write_all(&seq)?;
-                writeln!(filtered_lock)?;
-            }
-        },
-        Ok(None) => {},
-        Err(e) => eprintln!("Processing Error: {}", e),
-    }
-    
-    Ok(())
-}
-
-fn process_fasta<P: AsRef<Path>>(path: P, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<File>>, record_counter: &Arc<AtomicUsize>) -> Result<(), std::io::Error> {
+fn process_fasta<P: AsRef<Path>>(
+    path: P,
+    params: &cwt::Params,
+    processed_seqnames: &Arc<Mutex<Vec<String>>>,
+    opt: &Opt
+) -> Result<(), std::io::Error> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut current_seq = Vec::new();
+    let mut current_id = String::new();
 
     for line in reader.lines() {
         let line = line?;
         if line.starts_with('>') {
             if !current_seq.is_empty() {
-                process_sequence(current_seq, params, processed_seqnames, opt, filtered, record_counter)?;
-                current_seq = Vec::new();
+                process_sequence(&current_seq, &current_id, params, processed_seqnames, opt)?;
+                current_seq.clear();
             }
+            current_id = line[1..].trim().to_string(); // Remove '>' and trim
         } else {
             current_seq.extend(line.bytes());
         }
     }
 
     if !current_seq.is_empty() {
-        process_sequence(current_seq, params, processed_seqnames, opt, filtered, record_counter)?;
+        process_sequence(&current_seq, &current_id, params, processed_seqnames, opt)?;
     }
 
     Ok(())
 }
+
+fn process_sequence(
+    seq: &[u8],
+    id: &str,
+    params: &cwt::Params,
+    processed_seqnames: &Arc<Mutex<Vec<String>>>,
+    opt: &Opt
+) -> Result<(), std::io::Error> {
+    let mut seq_copy = seq.to_vec();
+    let temp_cwt = NamedTempFile::new()?;
+    let seqname = temp_cwt.path().to_str().unwrap().to_string();
+
+    let cwt_iterator = cwt::CwtIterator::new(&mut seq_copy, params);
+    
+    let mut cwt_file = File::create(format!("{}.cwt", id))?;
+    let mut length = 0;
+
+    for batch in cwt_iterator.iter() {
+        for row in batch.axis_iter(Axis(1)) {
+            for val in row.iter() {
+                cwt_file.write_f64::<LittleEndian>(*val)?;
+            }
+            length += 1;
+        }
+    }
+
+    let mut conf_file = File::create(format!("{}.conf", id))?;
+    conf_file.write_all(format!("{},{}", length, opt.number).as_bytes())?;
+
+    processed_seqnames.lock().unwrap().push(seqname);
+
+    Ok(())
+}
+
 
 fn report_progress(total_reads: &AtomicUsize, start_time: &Instant) {
     let reads = total_reads.load(Ordering::Relaxed);
@@ -140,7 +159,7 @@ fn process_fastq<P: AsRef<Path> + Sync>(
     params: &cwt::Params,
     processed_seqnames: &Arc<Mutex<Vec<String>>>,
     opt: &Opt,
-    filtered: &Arc<Mutex<File>>,
+    filtered: &Arc<Mutex<BufWriter<File>>>,
 ) -> Result<(), std::io::Error> {
     let file = File::open(&path)?;
     let file_size = file.metadata()?.len();
@@ -191,7 +210,7 @@ fn process_fastq<P: AsRef<Path> + Sync>(
             if id_end == chunk.len() {
                 break;
             }
-            let id = String::from_utf8_lossy(&chunk[current_pos + 1..id_end]).into_owned();
+            let id = &chunk[current_pos + 1..id_end]; // Skip the '@' character
             current_pos = id_end + 1;
 
             // Read the sequence line
@@ -202,7 +221,7 @@ fn process_fastq<P: AsRef<Path> + Sync>(
             if seq_end == chunk.len() {
                 break;
             }
-            let seq = chunk[current_pos..seq_end].to_vec();
+            let seq = &chunk[current_pos..seq_end];
             current_pos = seq_end + 1;
 
             // Skip the '+' line
@@ -234,18 +253,20 @@ fn process_fastq<P: AsRef<Path> + Sync>(
     Ok(())
 }
 
-fn process_sequence_with_id(id: String, seq: Vec<u8>, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<File>>) -> Result<(), std::io::Error> {
+fn process_sequence_with_id(id: &[u8], seq: &[u8], params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<BufWriter<File>>>) -> Result<(), std::io::Error> {
     let temp_cwt = NamedTempFile::new()?;
-    let mut seq_copy = seq.clone();
+    let mut seq_copy = seq.to_vec();
     
     match cwt_and_process(&mut seq_copy, params, processed_seqnames, temp_cwt.path().to_str().unwrap().to_string(), opt) {
         Ok(Some(shannon_diversity_avg)) => {
             let threshold = opt.threshold.unwrap();
             if shannon_diversity_avg < threshold {
                 let mut filtered_lock = filtered.lock().unwrap();
-                writeln!(filtered_lock, "{}", id)?;
-                filtered_lock.write_all(&seq)?;
-                writeln!(filtered_lock)?;
+                filtered_lock.write_all(b">")?; // Write '>' for FASTA format
+                filtered_lock.write_all(id)?;
+                filtered_lock.write_all(b"\n")?;
+                filtered_lock.write_all(seq)?;
+                filtered_lock.write_all(b"\n")?;
             }
         },
         Ok(None) => {},
@@ -269,12 +290,11 @@ fn main() -> Result<(), std::io::Error> {
     };
 
     let processed_seqnames = Arc::new(Mutex::new(Vec::new()));
-    let record_counter = Arc::new(AtomicUsize::new(1));
-    let filtered = Arc::new(Mutex::new(File::create("filtered.fasta")?));
 
     if opt.input.ends_with(".fasta") || opt.input.ends_with(".fa") {
-        process_fasta(&opt.input, &params, &processed_seqnames, &opt, &filtered, &record_counter)?;
+        process_fasta(&opt.input, &params, &processed_seqnames, &opt)?;
     } else if opt.input.ends_with(".fastq") || opt.input.ends_with(".fq") {
+        let filtered = Arc::new(Mutex::new(BufWriter::new(File::create("filtered.fasta")?)));
         process_fastq(&opt.input, &params, &processed_seqnames, &opt, &filtered)?;
     } else {
         eprintln!("Unsupported file format. Please use .fasta, .fa, .fastq, or .fq files.");
