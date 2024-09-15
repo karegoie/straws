@@ -96,7 +96,7 @@ fn main() {
                         let mut temp_seq = chunk.to_vec();
                         let mut shannon_diversity = Vec::new();
     
-                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), format!("temp_{}", index), &opt, 0) {
+                        if let Err(e) = cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), format!("temp_{}", index), &opt, index) {
                             eprintln!("Processing Error: {}", e);
                             return None;
                         }
@@ -112,6 +112,7 @@ fn main() {
     
                         std::fs::remove_file(&ent_file).unwrap();
                         std::fs::remove_file(format!("temp_{}.cwt", index)).unwrap();
+                        std::fs::remove_file(format!("temp_{}.conf", index)).unwrap();
     
                         if seq::mean(&shannon_diversity) < opt.threshold {
                             Some(chunk.to_vec())
