@@ -1,16 +1,19 @@
 use std::fs::File;
-use std::io::{Write, BufReader, BufRead, SeekFrom, Seek};
+use std::io::{Write, BufReader, BufRead};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
+
 use strauws::cwt;
 use strauws::seq;
+
 use structopt::StructOpt;
 use ndarray::prelude::*;
 use byteorder::{LittleEndian, WriteBytesExt};
 use rayon::prelude::*;
 use tempfile::NamedTempFile;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use memmap2::MmapOptions;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "straws", about = "Size-free Tandem Repeat analysis using Continuous Wavelet Transform and Signaling")]
@@ -124,12 +127,7 @@ fn process_fasta<P: AsRef<Path>>(path: P, params: &cwt::Params, processed_seqnam
 
     Ok(())
 }
-fn process_fastq_chunk(chunk: Vec<String>, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<File>>, record_counter: &Arc<AtomicUsize>) -> Result<(), std::io::Error> {
-    for seq in chunk.into_iter() {
-        process_sequence(seq.into_bytes(), params, processed_seqnames, opt, filtered, record_counter)?;
-    }
-    Ok(())
-}
+
 fn report_progress(total_reads: &AtomicUsize, start_time: &Instant) {
     let reads = total_reads.load(Ordering::Relaxed);
     let elapsed = start_time.elapsed();
@@ -137,68 +135,83 @@ fn report_progress(total_reads: &AtomicUsize, start_time: &Instant) {
     println!("Processed {} hundred thousand reads in {:?}", reads_in_hundred_thousands, elapsed);
 }
 
-fn process_fastq<P: AsRef<Path> + Sync>(path: P, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<File>>, record_counter: &Arc<AtomicUsize>) -> Result<(), std::io::Error> {
+fn process_fastq<P: AsRef<Path> + Sync>(
+    path: P,
+    params: &cwt::Params,
+    processed_seqnames: &Arc<Mutex<Vec<String>>>,
+    opt: &Opt,
+    filtered: &Arc<Mutex<File>>,
+    record_counter: &Arc<AtomicUsize>
+) -> Result<(), std::io::Error> {
     let file = File::open(&path)?;
-    let mut reader = BufReader::new(file);
-    
+    let file_size = file.metadata()?.len();
+
+    let mmap = unsafe { MmapOptions::new().map(&file)? };
+
     let num_cpus = sys_info::cpu_num().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))? as usize;
     println!("Detected {} CPUs", num_cpus);
-    
-    let file_size = reader.seek(SeekFrom::End(0))?;
-    reader.seek(SeekFrom::Start(0))?;
-    
+
     let chunk_size = file_size / num_cpus as u64;
-    
     let mut start_positions = vec![0u64];
+
+    // Find chunk boundaries
     for i in 1..num_cpus {
         let mut pos = i as u64 * chunk_size;
-        reader.seek(SeekFrom::Start(pos))?;
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        pos = reader.seek(SeekFrom::Current(0))?;
-        while !line.starts_with('@') {
-            reader.read_line(&mut line)?;
-            pos = reader.seek(SeekFrom::Current(0))?;
+        while pos < file_size && mmap[pos as usize] != b'\n' {
+            pos += 1;
         }
-        start_positions.push(pos);
+        pos += 1; // Move to the start of the next line
+        while pos < file_size && mmap[pos as usize] != b'@' {
+            while pos < file_size && mmap[pos as usize] != b'\n' {
+                pos += 1;
+            }
+            pos += 1;
+        }
+        if pos < file_size {
+            start_positions.push(pos);
+        }
     }
     start_positions.push(file_size);
-    
+
     let total_reads = Arc::new(AtomicUsize::new(0));
     let start_time = Instant::now();
 
     println!("Processing FASTQ file with {} chunks", start_positions.len() - 1);
-    start_positions.par_windows(2).map(|window| {
-        let start = window[0];
-        let end = window[1];
-        let mut chunk_reader = BufReader::new(File::open(&path)?);
-        chunk_reader.seek(SeekFrom::Start(start))?;
-        let mut chunk = Vec::new();
-        let mut current_pos = start;
+    start_positions.par_windows(2).for_each(|window| {
+        let start = window[0] as usize;
+        let end = window[1] as usize;
+        let chunk = &mmap[start..end];
         
-        while current_pos < end {
-            let mut seq = String::new();
-            chunk_reader.read_line(&mut seq)?;  // Read sequence
-            if seq.is_empty() {
+        let mut current_pos = 0;
+        while current_pos < chunk.len() {
+            let mut line_end = current_pos;
+            while line_end < chunk.len() && chunk[line_end] != b'\n' {
+                line_end += 1;
+            }
+            if line_end == chunk.len() {
                 break;
             }
-            chunk_reader.read_line(&mut String::new())?;  // Skip '+' line
-            chunk_reader.read_line(&mut String::new())?;  // Skip quality line
-            chunk_reader.read_line(&mut String::new())?;  // Skip name line of next record
             
-            chunk.push(seq.trim().to_string());
-            current_pos = chunk_reader.seek(SeekFrom::Current(0))?;
+            let seq = String::from_utf8_lossy(&chunk[current_pos..line_end]).into_owned();
+            
+            // Skip the next three lines ('+', quality, and '@' of the next record)
+            for _ in 0..3 {
+                while current_pos < chunk.len() && chunk[current_pos] != b'\n' {
+                    current_pos += 1;
+                }
+                current_pos += 1;
+            }
+            
+            if let Err(e) = process_sequence(seq.into_bytes(), params, processed_seqnames, opt, filtered, record_counter) {
+                eprintln!("Error processing sequence: {}", e);
+            }
+            
+            total_reads.fetch_add(1, Ordering::Relaxed);
+            if total_reads.load(Ordering::Relaxed) % 100_000 == 0 {
+                report_progress(&total_reads, &start_time);
+            }
         }
-        
-        let reads_in_chunk = chunk.len();
-        total_reads.fetch_add(reads_in_chunk, Ordering::Relaxed);
-
-        if total_reads.load(Ordering::Relaxed) % 100_000 == 0 {
-            report_progress(&total_reads, &start_time);
-        }
-
-        process_fastq_chunk(chunk, params, processed_seqnames, opt, filtered, record_counter)
-    }).collect::<Result<(), std::io::Error>>()?;
+    });
 
     // Final report
     report_progress(&total_reads, &start_time);
