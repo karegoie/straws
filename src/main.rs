@@ -33,7 +33,7 @@ struct Opt {
     #[structopt(short, long)]
     filter: bool,
 
-    #[structopt(short = "e", long = "threshold", required_if("filter", "true"))]
+    #[structopt(short = "d", long = "threshold", required_if("filter", "true"))]
     threshold: f64,
 }
 
