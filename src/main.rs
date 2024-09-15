@@ -10,6 +10,7 @@ use rayon::prelude::*;
 use tempfile::NamedTempFile;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "straws", about = "Size-free Tandem Repeat analysis using Continuous Wavelet Transform and Signaling")]
@@ -129,6 +130,12 @@ fn process_fastq_chunk(chunk: Vec<String>, params: &cwt::Params, processed_seqna
     }
     Ok(())
 }
+fn report_progress(total_reads: &AtomicUsize, start_time: &Instant) {
+    let reads = total_reads.load(Ordering::Relaxed);
+    let elapsed = start_time.elapsed();
+    let reads_in_hundred_thousands = reads / 100_000;
+    println!("Processed {} hundred thousand reads in {:?}", reads_in_hundred_thousands, elapsed);
+}
 
 fn process_fastq<P: AsRef<Path> + Sync>(path: P, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<File>>, record_counter: &Arc<AtomicUsize>) -> Result<(), std::io::Error> {
     let file = File::open(&path)?;
@@ -156,6 +163,9 @@ fn process_fastq<P: AsRef<Path> + Sync>(path: P, params: &cwt::Params, processed
     }
     start_positions.push(file_size);
     
+    let total_reads = Arc::new(AtomicUsize::new(0));
+    let start_time = Instant::now();
+
     start_positions.par_windows(2).map(|window| {
         let start = window[0];
         let end = window[1];
@@ -178,8 +188,18 @@ fn process_fastq<P: AsRef<Path> + Sync>(path: P, params: &cwt::Params, processed
             current_pos = chunk_reader.seek(SeekFrom::Current(0))?;
         }
         
+        let reads_in_chunk = chunk.len();
+        total_reads.fetch_add(reads_in_chunk, Ordering::Relaxed);
+
+        if total_reads.load(Ordering::Relaxed) % 100_000 == 0 {
+            report_progress(&total_reads, &start_time);
+        }
+
         process_fastq_chunk(chunk, params, processed_seqnames, opt, filtered, record_counter)
     }).collect::<Result<(), std::io::Error>>()?;
+
+    // Final report
+    report_progress(&total_reads, &start_time);
 
     Ok(())
 }
