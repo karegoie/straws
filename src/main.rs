@@ -166,6 +166,7 @@ fn process_fastq<P: AsRef<Path> + Sync>(path: P, params: &cwt::Params, processed
     let total_reads = Arc::new(AtomicUsize::new(0));
     let start_time = Instant::now();
 
+    println!("Processing FASTQ file with {} chunks", start_positions.len() - 1);
     start_positions.par_windows(2).map(|window| {
         let start = window[0];
         let end = window[1];
