@@ -1,8 +1,5 @@
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
 use num_complex::Complex;
 use rayon::prelude::*;
-use tempfile::NamedTempFile;
 
 struct Converter;
 trait Convert {
@@ -28,60 +25,6 @@ pub fn convert_to_signal(sequence: &mut Vec<u8>) -> Vec<Vec<Complex<f64>>> { // 
     converted_sequence
 }
 
-pub fn read_fasta_to_vec(file: &NamedTempFile) -> Result<Vec<u8>, io::Error>
-{
-    let file = file.reopen()?;
-    let reader = BufReader::new(file);
-    
-    let mut sequence = Vec::new();
-
-    for line_result in reader.lines() {
-        let line = line_result.expect("Reading individual fasta file error");
-        sequence.extend_from_slice(line.as_bytes());
-    }
-
-    Ok(sequence)
-}
-
-pub fn read_fastq_to_vec(file: &str, chunk_size: usize) -> Result<Vec<Vec<u8>>, io::Error> {
-    let file = File::open(file).expect("file opening error");
-    let reader = BufReader::new(file);
-    let mut chunks = Vec::new();
-    let mut current_chunk = Vec::new();
-    let mut lines = reader.lines().enumerate();
-
-    while let Some((i, line_result)) = lines.next() {
-        let line = line_result?;
-        
-        // Every 4th line (0-indexed) is the start of a new record
-        if i % 4 == 0 {
-            if !line.starts_with('@') {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Malformed FASTQ: ID line doesn't start with @"));
-            }
-            // Skip to the next line, which contains the sequence
-            if let Some((_, seq_result)) = lines.next() {
-                let seq = seq_result?;
-                current_chunk.extend(seq.bytes());
-                if current_chunk.len() >= chunk_size {
-                    chunks.push(current_chunk);
-                    current_chunk = Vec::new();
-                }
-            } else {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Malformed FASTQ: unexpected end of file"));
-            }
-            // Skip the '+' line and quality score line
-            lines.next();
-            lines.next();
-        }
-    }
-
-    if !current_chunk.is_empty() {
-        chunks.push(current_chunk);
-    }
-
-    Ok(chunks)
-}
-
 pub fn transpose(matrix: Vec<Vec<f64>>) -> Vec<Vec<f64>> {
     if matrix.is_empty() || matrix[0].is_empty() {
         return vec![]; 
@@ -102,44 +45,7 @@ pub fn transpose(matrix: Vec<Vec<f64>>) -> Vec<Vec<f64>> {
     transposed
 }
 
-pub fn split_fasta(filename: &str) -> Result<(Vec<NamedTempFile>, Vec<String>),io::Error> {
-    let file = File::open(filename)?;
-    let reader = BufReader::new(file);
-
-    let mut sequences = Vec::new();
-    let mut is_sequence_line = false;
-
-    let mut seqnames: Vec<String> = Vec::new();
-    let mut tempfile_list: Vec<NamedTempFile> = Vec::new();
-
-    for line_result in reader.lines() {
-        let line = line_result?;
-        if line.starts_with('>') {
-            if is_sequence_line {
-                let mut tempfile = NamedTempFile::new()?;
-                tempfile.write_all(&sequences)?;
-                tempfile_list.push(tempfile);
-                sequences.clear();
-            }
-            let desc: Vec<&str> = line.split_whitespace().collect();
-            seqnames.push(desc[0][1..].to_string());
-            is_sequence_line = true;
-        } else if is_sequence_line {
-            sequences.extend_from_slice(line.as_bytes());
-            sequences.push(b'\n');
-        }
-    }
-
-    if !sequences.is_empty() {
-        let mut tempfile = NamedTempFile::new()?;
-        tempfile.write_all(&sequences)?;
-        tempfile_list.push(tempfile);
-    }
-
-    Ok((tempfile_list, seqnames))
-}
-
-pub fn mean(data: &[f64]) -> f64 {
+fn mean(data: &[f64]) -> f64 {
     data.iter().sum::<f64>() / data.len() as f64
 }
 
