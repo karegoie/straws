@@ -141,7 +141,6 @@ fn process_fastq<P: AsRef<Path> + Sync>(
     processed_seqnames: &Arc<Mutex<Vec<String>>>,
     opt: &Opt,
     filtered: &Arc<Mutex<File>>,
-    record_counter: &Arc<AtomicUsize>
 ) -> Result<(), std::io::Error> {
     let file = File::open(&path)?;
     let file_size = file.metadata()?.len();
@@ -184,25 +183,37 @@ fn process_fastq<P: AsRef<Path> + Sync>(
         
         let mut current_pos = 0;
         while current_pos < chunk.len() {
-            let mut line_end = current_pos;
-            while line_end < chunk.len() && chunk[line_end] != b'\n' {
-                line_end += 1;
+            // Read the ID line
+            let mut id_end = current_pos;
+            while id_end < chunk.len() && chunk[id_end] != b'\n' {
+                id_end += 1;
             }
-            if line_end == chunk.len() {
+            if id_end == chunk.len() {
                 break;
             }
-            
-            let seq = String::from_utf8_lossy(&chunk[current_pos..line_end]).into_owned();
-            
-            // Skip the next three lines ('+', quality, and '@' of the next record)
-            for _ in 0..3 {
+            let id = String::from_utf8_lossy(&chunk[current_pos + 1..id_end]).into_owned();
+            current_pos = id_end + 1;
+
+            // Read the sequence line
+            let mut seq_end = current_pos;
+            while seq_end < chunk.len() && chunk[seq_end] != b'\n' {
+                seq_end += 1;
+            }
+            if seq_end == chunk.len() {
+                break;
+            }
+            let seq = String::from_utf8_lossy(&chunk[current_pos..seq_end]).into_owned();
+            current_pos = seq_end + 1;
+
+            // Skip the '+' line and quality score line
+            for _ in 0..2 {
                 while current_pos < chunk.len() && chunk[current_pos] != b'\n' {
                     current_pos += 1;
                 }
                 current_pos += 1;
             }
             
-            if let Err(e) = process_sequence(seq.into_bytes(), params, processed_seqnames, opt, filtered, record_counter) {
+            if let Err(e) = process_sequence_with_id(id, seq.into_bytes(), params, processed_seqnames, opt, filtered) {
                 eprintln!("Error processing sequence: {}", e);
             }
             
@@ -216,6 +227,27 @@ fn process_fastq<P: AsRef<Path> + Sync>(
     // Final report
     report_progress(&total_reads, &start_time);
 
+    Ok(())
+}
+
+fn process_sequence_with_id(id: String, seq: Vec<u8>, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<File>>) -> Result<(), std::io::Error> {
+    let temp_cwt = NamedTempFile::new()?;
+    let mut seq_copy = seq.clone();
+    
+    match cwt_and_process(&mut seq_copy, params, processed_seqnames, temp_cwt.path().to_str().unwrap().to_string(), opt) {
+        Ok(Some(shannon_diversity_avg)) => {
+            let threshold = opt.threshold.unwrap();
+            if shannon_diversity_avg < threshold {
+                let mut filtered_lock = filtered.lock().unwrap();
+                writeln!(filtered_lock, "{}", id)?;
+                filtered_lock.write_all(&seq)?;
+                writeln!(filtered_lock)?;
+            }
+        },
+        Ok(None) => {},
+        Err(e) => eprintln!("Processing Error: {}", e),
+    }
+    
     Ok(())
 }
 
@@ -239,7 +271,7 @@ fn main() -> Result<(), std::io::Error> {
     if opt.input.ends_with(".fasta") || opt.input.ends_with(".fa") {
         process_fasta(&opt.input, &params, &processed_seqnames, &opt, &filtered, &record_counter)?;
     } else if opt.input.ends_with(".fastq") || opt.input.ends_with(".fq") {
-        process_fastq(&opt.input, &params, &processed_seqnames, &opt, &filtered, &record_counter)?;
+        process_fastq(&opt.input, &params, &processed_seqnames, &opt, &filtered)?;
     } else {
         eprintln!("Unsupported file format. Please use .fasta, .fa, .fastq, or .fq files.");
         return Ok(());
