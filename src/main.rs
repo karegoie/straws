@@ -90,21 +90,17 @@ fn main() {
     if opt.filter {
         let mut filtered = File::create("filtered.fasta").expect("Error creating filtered file");
     
-        match seq::read_fastq_to_vec(opt.input.as_str()) {
-            Ok(initial_seq) => {
-                let chunk_size = 10000;
-                let chunks: Vec<_> = initial_seq.chunks(chunk_size).collect();
-    
+        match seq::read_fastq_to_vec(opt.input.as_str(), 10000) {
+            Ok(chunks) => {
                 let filtered_chunks: Vec<_> = chunks.par_iter()
                     .filter_map(|chunk| {
-                        let mut temp_seq = chunk.to_vec();
-    
                         let temp_cwt = NamedTempFile::new().expect("Failed to create temporary file");
     
-                        match cwt_and_process(&mut temp_seq, &params, &mut Vec::new(), temp_cwt.path().to_str().unwrap().to_string(), &opt) {
+                        let mut chunk_copy = chunk.clone();
+                        match cwt_and_process(&mut chunk_copy, &params, &mut Vec::new(), temp_cwt.path().to_str().unwrap().to_string(), &opt) {
                             Ok(shannon_diversity) => {
                                 if seq::mean(&shannon_diversity) < opt.threshold {
-                                    Some(chunk.to_vec())
+                                    Some(chunk.clone())
                                 } else {
                                     None
                                 }

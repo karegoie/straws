@@ -43,10 +43,11 @@ pub fn read_fasta_to_vec(file: &NamedTempFile) -> Result<Vec<u8>, io::Error>
     Ok(sequence)
 }
 
-pub fn read_fastq_to_vec(file: &str) -> Result<Vec<u8>, io::Error> {
+pub fn read_fastq_to_vec(file: &str, chunk_size: usize) -> Result<Vec<Vec<u8>>, io::Error> {
     let file = File::open(file).expect("file opening error");
     let reader = BufReader::new(file);
-    let mut sequences = Vec::new();
+    let mut chunks = Vec::new();
+    let mut current_chunk = Vec::new();
     let mut lines = reader.lines().enumerate();
 
     while let Some((i, line_result)) = lines.next() {
@@ -60,7 +61,11 @@ pub fn read_fastq_to_vec(file: &str) -> Result<Vec<u8>, io::Error> {
             // Skip to the next line, which contains the sequence
             if let Some((_, seq_result)) = lines.next() {
                 let seq = seq_result?;
-                sequences.extend(seq.bytes());
+                current_chunk.extend(seq.bytes());
+                if current_chunk.len() >= chunk_size {
+                    chunks.push(current_chunk);
+                    current_chunk = Vec::new();
+                }
             } else {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "Malformed FASTQ: unexpected end of file"));
             }
@@ -70,7 +75,11 @@ pub fn read_fastq_to_vec(file: &str) -> Result<Vec<u8>, io::Error> {
         }
     }
 
-    Ok(sequences)
+    if !current_chunk.is_empty() {
+        chunks.push(current_chunk);
+    }
+
+    Ok(chunks)
 }
 
 pub fn transpose(matrix: Vec<Vec<f64>>) -> Vec<Vec<f64>> {
