@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use strauws::cwt;
-use strauws::seq;
+use straws::cwt;
+use straws::seq;
 
 use structopt::StructOpt;
 use ndarray::prelude::*;

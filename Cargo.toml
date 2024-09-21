@@ -1,5 +1,5 @@
 [package]
-name = "strauws"
+name = "straws"
 version = "0.1.2"
 edition = "2021"
 
@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 rayon = "1.8.0"
-ndarray = "0.15.6"
+ndarray = "0.16.1"
 rustfft = "6.1.0"
 rand = "0.8.0"
 rand_distr = "0.4.3"
