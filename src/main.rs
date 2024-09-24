@@ -305,7 +305,6 @@ fn process_sequence_fastq_with_id(
     opt: &Opt, 
     filtered: &Arc<Mutex<BufWriter<File>>>
 ) -> Result<(), std::io::Error> {
-    let temp_cwt = NamedTempFile::new()?;
     //let seqname = temp_cwt.path().to_str().unwrap().to_string();
     
     match process_sequence_fastq(seq, std::str::from_utf8(id).unwrap(), params, processed_seqnames, opt, filtered) {
