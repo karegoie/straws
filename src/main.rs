@@ -44,44 +44,6 @@ struct Opt {
     threshold: Option<f64>,
 }
 
-fn cwt_and_process(sequence: &mut Vec<u8>, params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, seqname: String, opt: &Opt)
-                   -> Result<Option<f64>, std::io::Error>
-{                   
-    let cwt_iterator = cwt::CwtIterator::new(sequence, &params);
-
-    let mut file = File::create(format!("{}", seqname))?;  
-    let mut length = 0;
-    let mut shannon_diversity = Vec::new();
-    for batch in cwt_iterator.iter() {
-        for row in batch.axis_iter(Axis(1)) {
-            for val in row.iter() {
-                file.write_f64::<LittleEndian>(*val)?;      
-            }
-            shannon_diversity.push(seq::calculate_shannon_diversity_for_vector(&row.to_vec()));
-            length += 1;
-        }
-    }
-
-    // write shannon diversity to .ent file  
-    let ent_file = format!("{}.ent", seqname);
-    let mut ent = File::create(ent_file)?;
-    for val in shannon_diversity.iter() {
-        ent.write_f64::<LittleEndian>(*val)?;
-    }
-    
-    let conf_file = format!("{}.conf", seqname);  
-    let mut conf = File::create(conf_file)?;    
-    conf.write_all(format!("{},{}", length, opt.number).as_bytes())?;
-
-    processed_seqnames.lock().unwrap().push(seqname.clone());
-
-    if opt.filter {
-        Ok(Some(shannon_diversity.iter().sum::<f64>() / shannon_diversity.len() as f64))
-    } else {
-        Ok(None)
-    }
-}
-
 fn process_fasta<P: AsRef<Path>>(
     path: P,
     params: &cwt::Params,
@@ -97,7 +59,7 @@ fn process_fasta<P: AsRef<Path>>(
         let line = line?;
         if line.starts_with('>') {
             if !current_seq.is_empty() {
-                process_sequence(&current_seq, &current_id, params, processed_seqnames, opt)?;
+                process_sequence_fasta(&current_seq, &current_id, params, processed_seqnames, opt)?;
                 current_seq.clear();
             }
             current_id = line[1..].trim().to_string(); // Remove '>' and trim
@@ -107,45 +69,107 @@ fn process_fasta<P: AsRef<Path>>(
     }
 
     if !current_seq.is_empty() {
-        process_sequence(&current_seq, &current_id, params, processed_seqnames, opt)?;
+        process_sequence_fasta(&current_seq, &current_id, params, processed_seqnames, opt)?;
     }
 
     Ok(())
 }
 
-fn process_sequence(
+fn process_sequence_fastq(
+    seq: &[u8], 
+    id: &str,
+    params: &cwt::Params,
+    processed_seqnames: &Arc<Mutex<Vec<String>>>,
+    opt: &Opt,
+    filtered: &Arc<Mutex<BufWriter<File>>>,
+) -> Result<Option<f64>, std::io::Error> {
+    let mut seq_copy = seq.to_vec();
+    let temp_cwt = NamedTempFile::new()?;
+    let seqname = temp_cwt.path().to_str().unwrap().to_string();
+    
+    let cwt_iterator = cwt::CwtIterator::new(&mut seq_copy, params);
+
+    let mut file = File::create(format!("{}.cwt", id))?;
+    let mut length = 0;
+    let mut shannon_diversity = Vec::new();
+    
+    for batch in cwt_iterator.iter() {
+        for row in batch.axis_iter(Axis(1)) {
+            for val in row.iter() {
+                file.write_f64::<LittleEndian>(*val)?;      
+            }
+            shannon_diversity.push(seq::calculate_shannon_diversity_for_vector(&row.to_vec()));
+            length += 1;
+        }
+    }
+    
+    let ent_file = format!("{}.ent", id);
+    let mut ent = File::create(ent_file)?;
+    for val in shannon_diversity.iter() {
+        ent.write_f64::<LittleEndian>(*val)?;
+    }
+    
+    let conf_file = format!("{}.conf", id);
+    let mut conf = File::create(conf_file)?;
+    conf.write_all(format!("{},{}", length, opt.number).as_bytes())?;
+    
+    processed_seqnames.lock().unwrap().push(seqname);
+    
+    let shannon_diversity_avg = shannon_diversity.iter().sum::<f64>() / shannon_diversity.len() as f64;
+    let threshold = opt.threshold.unwrap();
+    if shannon_diversity_avg < threshold {
+        let mut filtered_lock = filtered.lock().unwrap();
+        filtered_lock.write_all(b">")?; 
+        filtered_lock.write_all(id.as_bytes())?;
+        filtered_lock.write_all(b"\n")?;
+        filtered_lock.write_all(seq)?;
+        filtered_lock.write_all(b"\n")?;
+    }
+    Ok(Some(shannon_diversity_avg))
+
+}
+
+fn process_sequence_fasta(
     seq: &[u8],
     id: &str,
     params: &cwt::Params,
     processed_seqnames: &Arc<Mutex<Vec<String>>>,
-    opt: &Opt
+    opt: &Opt,
 ) -> Result<(), std::io::Error> {
     let mut seq_copy = seq.to_vec();
     let temp_cwt = NamedTempFile::new()?;
     let seqname = temp_cwt.path().to_str().unwrap().to_string();
 
     let cwt_iterator = cwt::CwtIterator::new(&mut seq_copy, params);
-    
-    let mut cwt_file = File::create(format!("{}.cwt", id))?;
+
+    let mut file = File::create(format!("{}.cwt", id))?;
     let mut length = 0;
+    let mut shannon_diversity = Vec::new();
 
     for batch in cwt_iterator.iter() {
         for row in batch.axis_iter(Axis(1)) {
             for val in row.iter() {
-                cwt_file.write_f64::<LittleEndian>(*val)?;
+                file.write_f64::<LittleEndian>(*val)?;
             }
+            shannon_diversity.push(seq::calculate_shannon_diversity_for_vector(&row.to_vec()));
             length += 1;
         }
     }
 
-    let mut conf_file = File::create(format!("{}.conf", id))?;
-    conf_file.write_all(format!("{},{}", length, opt.number).as_bytes())?;
+    let ent_file = format!("{}.ent", id);
+    let mut ent = File::create(ent_file)?;
+    for val in shannon_diversity.iter() {
+        ent.write_f64::<LittleEndian>(*val)?;
+    }
+
+    let conf_file = format!("{}.conf", id);
+    let mut conf = File::create(conf_file)?;
+    conf.write_all(format!("{},{}", length, opt.number).as_bytes())?;
 
     processed_seqnames.lock().unwrap().push(seqname);
 
     Ok(())
 }
-
 
 fn report_progress(total_reads: &AtomicUsize, start_time: &Instant) {
     let reads = total_reads.load(Ordering::Relaxed);
@@ -256,7 +280,7 @@ fn process_fastq<P: AsRef<Path> + Sync>(
             }
             current_pos = qual_end + 1;
             
-            if let Err(e) = process_sequence_with_id(id, seq, params, processed_seqnames, opt, filtered) {
+            if let Err(e) = process_sequence_fastq_with_id(id, seq, params, processed_seqnames, opt, filtered) {
                 eprintln!("Error processing sequence: {}", e);
             }
             
@@ -273,16 +297,23 @@ fn process_fastq<P: AsRef<Path> + Sync>(
     Ok(())
 }
 
-fn process_sequence_with_id(id: &[u8], seq: &[u8], params: &cwt::Params, processed_seqnames: &Arc<Mutex<Vec<String>>>, opt: &Opt, filtered: &Arc<Mutex<BufWriter<File>>>) -> Result<(), std::io::Error> {
+fn process_sequence_fastq_with_id(
+    id: &[u8], 
+    seq: &[u8], 
+    params: &cwt::Params, 
+    processed_seqnames: &Arc<Mutex<Vec<String>>>, 
+    opt: &Opt, 
+    filtered: &Arc<Mutex<BufWriter<File>>>
+) -> Result<(), std::io::Error> {
     let temp_cwt = NamedTempFile::new()?;
-    let mut seq_copy = seq.to_vec();
+    //let seqname = temp_cwt.path().to_str().unwrap().to_string();
     
-    match cwt_and_process(&mut seq_copy, params, processed_seqnames, temp_cwt.path().to_str().unwrap().to_string(), opt) {
+    match process_sequence_fastq(seq, std::str::from_utf8(id).unwrap(), params, processed_seqnames, opt, filtered) {
         Ok(Some(shannon_diversity_avg)) => {
             let threshold = opt.threshold.unwrap();
             if shannon_diversity_avg < threshold {
                 let mut filtered_lock = filtered.lock().unwrap();
-                filtered_lock.write_all(b">")?; // Write '>' for FASTA format
+                filtered_lock.write_all(b">")?;
                 filtered_lock.write_all(id)?;
                 filtered_lock.write_all(b"\n")?;
                 filtered_lock.write_all(seq)?;
@@ -290,7 +321,10 @@ fn process_sequence_with_id(id: &[u8], seq: &[u8], params: &cwt::Params, process
             }
         },
         Ok(None) => {},
-        Err(e) => eprintln!("Processing Error: {}", e),
+        Err(e) => {
+            eprintln!("Processing Error: {}", e);
+            return Err(e);
+        },
     }
     
     Ok(())
