@@ -10,7 +10,6 @@ use straws::seq;
 
 use structopt::StructOpt;
 use ndarray::prelude::*;
-use byteorder::{LittleEndian, WriteBytesExt};
 use rayon::prelude::*;
 use tempfile::NamedTempFile;
 use memmap2::MmapOptions;
@@ -48,28 +47,25 @@ fn process_fasta<P: AsRef<Path>>(
     path: P,
     params: &cwt::Params,
     processed_seqnames: &Arc<Mutex<Vec<String>>>,
-    opt: &Opt
 ) -> Result<(), std::io::Error> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut current_seq = Vec::new();
-    let mut current_id = String::new();
 
     for line in reader.lines() {
         let line = line?;
         if line.starts_with('>') {
             if !current_seq.is_empty() {
-                process_sequence_fasta(&current_seq, &current_id, params, processed_seqnames, opt)?;
+                process_sequence_fasta(&current_seq, params, processed_seqnames)?;
                 current_seq.clear();
             }
-            current_id = line[1..].trim().to_string(); // Remove '>' and trim
         } else {
             current_seq.extend(line.bytes());
         }
     }
 
     if !current_seq.is_empty() {
-        process_sequence_fasta(&current_seq, &current_id, params, processed_seqnames, opt)?;
+        process_sequence_fasta(&current_seq,  params, processed_seqnames)?;
     }
 
     Ok(())
@@ -89,29 +85,14 @@ fn process_sequence_fastq(
     
     let cwt_iterator = cwt::CwtIterator::new(&mut seq_copy, params);
 
-    let mut file = File::create(format!("{}.cwt", id))?;
-    let mut length = 0;
     let mut shannon_diversity = Vec::new();
     
     for batch in cwt_iterator.iter() {
         for row in batch.axis_iter(Axis(1)) {
-            for val in row.iter() {
-                file.write_f64::<LittleEndian>(*val)?;      
-            }
             shannon_diversity.push(seq::calculate_shannon_diversity_for_vector(&row.to_vec()));
-            length += 1;
         }
     }
     
-    let ent_file = format!("{}.ent", id);
-    let mut ent = File::create(ent_file)?;
-    for val in shannon_diversity.iter() {
-        ent.write_f64::<LittleEndian>(*val)?;
-    }
-    
-    let conf_file = format!("{}.conf", id);
-    let mut conf = File::create(conf_file)?;
-    conf.write_all(format!("{},{}", length, opt.number).as_bytes())?;
     
     processed_seqnames.lock().unwrap().push(seqname);
     
@@ -131,10 +112,8 @@ fn process_sequence_fastq(
 
 fn process_sequence_fasta(
     seq: &[u8],
-    id: &str,
     params: &cwt::Params,
     processed_seqnames: &Arc<Mutex<Vec<String>>>,
-    opt: &Opt,
 ) -> Result<(), std::io::Error> {
     let mut seq_copy = seq.to_vec();
     let temp_cwt = NamedTempFile::new()?;
@@ -142,29 +121,13 @@ fn process_sequence_fasta(
 
     let cwt_iterator = cwt::CwtIterator::new(&mut seq_copy, params);
 
-    let mut file = File::create(format!("{}.cwt", id))?;
-    let mut length = 0;
     let mut shannon_diversity = Vec::new();
 
     for batch in cwt_iterator.iter() {
         for row in batch.axis_iter(Axis(1)) {
-            for val in row.iter() {
-                file.write_f64::<LittleEndian>(*val)?;
-            }
             shannon_diversity.push(seq::calculate_shannon_diversity_for_vector(&row.to_vec()));
-            length += 1;
         }
     }
-
-    let ent_file = format!("{}.ent", id);
-    let mut ent = File::create(ent_file)?;
-    for val in shannon_diversity.iter() {
-        ent.write_f64::<LittleEndian>(*val)?;
-    }
-
-    let conf_file = format!("{}.conf", id);
-    let mut conf = File::create(conf_file)?;
-    conf.write_all(format!("{},{}", length, opt.number).as_bytes())?;
 
     processed_seqnames.lock().unwrap().push(seqname);
 
@@ -345,7 +308,7 @@ fn main() -> Result<(), std::io::Error> {
     let processed_seqnames = Arc::new(Mutex::new(Vec::new()));
 
     if (opt.input.ends_with(".fasta") || opt.input.ends_with(".fa")) && !opt.filter {
-        process_fasta(&opt.input, &params, &processed_seqnames, &opt)?;
+        process_fasta(&opt.input, &params, &processed_seqnames)?;
     } else if (opt.input.ends_with(".fastq") || opt.input.ends_with(".fq")) && opt.filter {
         let filtered = Arc::new(Mutex::new(BufWriter::new(File::create("filtered.fasta")?)));
         process_fastq(&opt.input, &params, &processed_seqnames, &opt, &filtered)?;
