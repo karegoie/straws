@@ -8,14 +8,11 @@ use sys_info::mem_info;
 use std::sync::{Arc, Mutex};
 use std::iter::Iterator;
 
-use crate::refine::z_norm;
-
 #[derive(Clone)]
 pub struct Params {
     pub num: usize,
     pub tradeoff: f64,
     pub t_values: Vec<f64>,
-    pub only: bool,
 }
 
 pub fn linspace(start: f64, stop: f64, num: usize) -> Array1<f64> {
@@ -91,48 +88,18 @@ fn cwt_perform(f: &Array1<Complex<f64>>, opt: &Params) -> Array2<f64> {
     result_cwt_perform.to_owned()
 }
 
-// pub fn normalize(matrix: &mut Array2<f64>) {
-//     let mut min = f64::MAX;
-//     let mut max = f64::MIN;
-//
-//     for row in matrix.axis_iter(Axis(0)) {
-//         for value in row.iter() {
-//             if *value < min {
-//                 min = *value;
-//             }
-//             if *value > max {
-//                 max = *value;
-//             }
-//         }
-//     }
-//
-//     let range = max - min;
-//
-//     //matrix.mapv_inplace(|x| (((x - min) / range) +1.0).log10());
-//     matrix.mapv_inplace(|x| (x - min) / range);
-// }
-
-pub fn normalize(matrix: &mut Array2<f64>) -> Array2<f64> {
-    //let mut min = f64::MAX;
-    //let mut max = f64::MIN;
-    let mut z = Vec::new();
-    let sh = matrix.shape();
-    for row in matrix.axis_iter(Axis(0)) {
-        //for value in row.iter() {
-        //if *value < min {
-        //  min = *value;
-        //}
-        //if *value > max {
-        //   max = *value;
-        // }
-        // }
-        z.extend(&z_norm(&row.to_vec()));
+pub fn _normalize(matrix: &mut Array2<f64>) {
+  for mut row in matrix.axis_iter_mut(Axis(0)) {
+        let min = row.fold(f64::MAX, |a, &b| a.min(b));
+        let max = row.fold(f64::MIN, |a, &b| a.max(b));
+        let range = max - min;
+        
+        if range != 0.0 {
+            row.mapv_inplace(|x| (x - min) / range);
+        } else {
+            row.fill(0.5);
+        }
     }
-    Array2::from_shape_vec((sh[0],sh[1]),z).unwrap()
-    //let range = max - min;
-
-    //matrix.mapv_inplace(|x| (((x - min) / range) +1.0).log10());
-    //matrix.mapv_inplace(|x| (x - min) / range);
 }
 
 #[derive(Clone)]
@@ -199,7 +166,6 @@ impl Iterator for CwtIterator {
 
 
         let start = self.current_batch * self.batch_size;
-        //println!("shape: {:?}", self.sig_seqs.dim());
         let end = std::cmp::min(start + self.batch_size, self.sig_seqs.dim().0);
         let batch = self.sig_seqs.slice(s![start..end, ..]).to_owned();
         let mut batch_cwt = Array2::<f64>::zeros((self.opt.num, batch.dim().0));
@@ -209,9 +175,7 @@ impl Iterator for CwtIterator {
         });
 
         self.current_batch += 1;
-        if self.opt.only {
-            batch_cwt = normalize(&mut batch_cwt);
-        }
+        _normalize(&mut batch_cwt);
         Some(batch_cwt)
     }
 }

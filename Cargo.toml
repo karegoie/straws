@@ -1,5 +1,5 @@
 [package]
-name = "strauws"
+name = "straws"
 version = "0.1.2"
 edition = "2021"
 
@@ -7,9 +7,8 @@ edition = "2021"
 
 [dependencies]
 rayon = "1.8.0"
-ndarray = "0.15.6"
+ndarray = "0.16.1"
 rustfft = "6.1.0"
-bio = "2.0.1"
 rand = "0.8.0"
 rand_distr = "0.4.3"
 tempfile = "3.10.1"
@@ -17,3 +16,4 @@ byteorder = "1.5.0"
 structopt = "0.3.26"
 num-complex = "0.4.6"
 sys-info = "0.9"
+memmap2 = "0.9.5"
