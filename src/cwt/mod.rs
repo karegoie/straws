@@ -88,25 +88,18 @@ fn cwt_perform(f: &Array1<Complex<f64>>, opt: &Params) -> Array2<f64> {
     result_cwt_perform.to_owned()
 }
 
-pub fn normalize(matrix: &mut Array2<f64>) {
-    let mut min = f64::MAX;
-    let mut max = f64::MIN;
-
-    for row in matrix.axis_iter(Axis(0)) {
-        for value in row.iter() {
-            if *value < min {
-                min = *value;
-            }
-            if *value > max {
-                max = *value;
-            }
+pub fn _normalize(matrix: &mut Array2<f64>) {
+  for mut row in matrix.axis_iter_mut(Axis(0)) {
+        let min = row.fold(f64::MAX, |a, &b| a.min(b));
+        let max = row.fold(f64::MIN, |a, &b| a.max(b));
+        let range = max - min;
+        
+        if range != 0.0 {
+            row.mapv_inplace(|x| (x - min) / range);
+        } else {
+            row.fill(0.5);
         }
     }
-
-    let range = max - min;
-
-    //matrix.mapv_inplace(|x| (((x - min) / range) +1.0).log10());
-    matrix.mapv_inplace(|x| (x - min) / range);
 }
 
 #[derive(Clone)]
@@ -173,7 +166,6 @@ impl Iterator for CwtIterator {
 
 
         let start = self.current_batch * self.batch_size;
-        //println!("shape: {:?}", self.sig_seqs.dim());
         let end = std::cmp::min(start + self.batch_size, self.sig_seqs.dim().0);
         let batch = self.sig_seqs.slice(s![start..end, ..]).to_owned();
         let mut batch_cwt = Array2::<f64>::zeros((self.opt.num, batch.dim().0));
@@ -183,7 +175,7 @@ impl Iterator for CwtIterator {
         });
 
         self.current_batch += 1;
-        normalize(&mut batch_cwt);
+        _normalize(&mut batch_cwt);
         Some(batch_cwt)
     }
 }
