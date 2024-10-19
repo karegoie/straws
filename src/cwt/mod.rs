@@ -4,14 +4,18 @@ use rayon::prelude::*;
 use ndarray::{Array, Array1, s, Array2, Axis};
 use rustfft::{FftPlanner, num_complex::Complex};
 use sys_info::mem_info;
+
 use std::sync::{Arc, Mutex};
 use std::iter::Iterator;
 
-#[derive(Clone, Debug)]
+use crate::refine::z_norm;
+
+#[derive(Clone)]
 pub struct Params {
     pub num: usize,
     pub tradeoff: f64,
     pub t_values: Vec<f64>,
+    pub only: bool,
 }
 
 pub fn linspace(start: f64, stop: f64, num: usize) -> Array1<f64> {
@@ -26,7 +30,8 @@ fn psi(wavelet_length: &f64, s: f64) -> Array1<Complex<f64>> {
 
     let t = linspace(-5.0,5.0, (*wavelet_length) as usize);
     // HERE: -5.0: 5.0 implies bandwith 10 for mother wavelet; multiply 10 with input
-
+    // TODO: parameter coule be changed
+    
     // Psi = c_sigma * (pi^(-1/4))* e^(-1/2 * t^2) * (e^(i*s*t) - kappa_sigma)
     let coeff = Complex::new(c_sigma * (PI.powf(-0.25)), 0.0);
     let part1 = t.mapv(|x| ((-0.5 * x * x) + i_s*x).exp()).mapv(|x| coeff * x);
@@ -99,20 +104,6 @@ pub fn _normalize(matrix: &mut Array2<f64>) {
         }
     }
 }
-
-pub fn _standardize(matrix: &mut Array2<f64>) {
-    for mut col in matrix.axis_iter_mut(Axis(0)) {
-        let mean = col.mean().unwrap_or(0.0);
-        let std_dev = col.std(0.0);
-
-        if std_dev != 0.0 {
-            col.mapv_inplace(|x| (x - mean) / std_dev);
-        } else {
-            col.mapv_inplace(|x| x - mean);
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct CwtIterator {
     sig_seqs: Array2<Complex<f64>>,
@@ -129,19 +120,19 @@ impl CwtIterator {
         let opt_clone = opt.clone();
         // Convert Vec<Vec<u8>> to Array2<bool>
         let sig_seqs: Array2<Complex<f64>> = Array::from_shape_vec((sig_seqs.len(), sig_seqs[0].len()), sig_seqs.par_iter_mut().flatten().map(|x| *x).collect()).unwrap();
-
+        
         let mem = mem_info().expect("Failed to get memory info");
 
-
+        
         let available_ram = mem.free; // KB
         let ram_for_batches = available_ram as f64 * 0.3; // 30% of available RAM
 
-
+        
         let size_of_complex = std::mem::size_of::<Complex<f64>>() as f64; // size of Complex<f64> in bytes
-
+        
         let inner_vec_size = opt.num;
         let size_of_inner_vec = inner_vec_size as f64 * size_of_complex; // 바이트 단위
-
+        
         let max_inner_vecs_in_batch = (ram_for_batches * 1024.0) / size_of_inner_vec;
 
         let fbatch_size: usize;
@@ -174,6 +165,7 @@ impl Iterator for CwtIterator {
         if self.current_batch >= (self.sig_seqs.dim().0 + self.batch_size - 1) / self.batch_size {
             return None;
         }
+        info!("Current batch: {}", self.current_batch + 1);
         
         let start = self.current_batch * self.batch_size;
         let end = std::cmp::min(start + self.batch_size, self.sig_seqs.dim().0);
@@ -186,25 +178,8 @@ impl Iterator for CwtIterator {
         });
 
         self.current_batch += 1;
-        //_normalize(&mut batch_cwt);
-        _standardize(&mut batch_cwt);
+        _normalize(&mut batch_cwt);
+        //_standardize(&mut batch_cwt);
         Some(batch_cwt)
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ndarray::arr2;
-
-    // Test _normalize function
-    #[test]
-    fn test_normalize_simple() {
-        let mut matrix = arr2(&[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
-        _normalize(&mut matrix);
-        
-        let expected = arr2(&[[0.0, 0.5, 1.0], [0.0, 0.5, 1.0]]);
-        assert_eq!(matrix, expected);
     }
 }
