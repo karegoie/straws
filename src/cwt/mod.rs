@@ -4,7 +4,6 @@ use rayon::prelude::*;
 use ndarray::{Array, Array1, s, Array2, Axis};
 use rustfft::{FftPlanner, num_complex::Complex};
 use sys_info::mem_info;
-use log::{debug, info};
 use std::sync::{Arc, Mutex};
 use std::iter::Iterator;
 
@@ -40,7 +39,6 @@ fn wavelet_convolution(tup: (&Array1<Complex<f64>>, f64), s: f64) -> Array1<f64>
     let wavelet_length = tup.1; // s is the scale
     let f_len = f.len();
 
-    debug!("Signal length: {}, Wavelet length: {}", f_len, (wavelet_length / 10.0).round());
     let mut f_hat = Array1::zeros(f_len + wavelet_length as usize);
     f_hat.slice_mut(s![..f_len]).assign(f);
     let h = psi(&wavelet_length, s as f64);
@@ -176,7 +174,6 @@ impl Iterator for CwtIterator {
         if self.current_batch >= (self.sig_seqs.dim().0 + self.batch_size - 1) / self.batch_size {
             return None;
         }
-        info!("Current batch: {}", self.current_batch + 1);
         
         let start = self.current_batch * self.batch_size;
         let end = std::cmp::min(start + self.batch_size, self.sig_seqs.dim().0);
