@@ -1,28 +1,65 @@
 use num_complex::Complex;
 use rayon::prelude::*;
 
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+
 struct Converter;
 trait Convert {
-    fn convert(&self, value: u8) -> Vec<Complex<f64>>; // Vec<bool>
+    fn convert(&self, value: u8) -> Complex<f64>; // Vec<bool>
 }
 
 impl Convert for Converter {
-    fn convert(&self, value: u8) -> Vec<Complex<f64>> {
+    fn convert(&self, value: u8) -> Complex<f64> {
         match value {
-            b'A' | b'a' => vec![Complex::new(1.0, 1.0)],  // 1+i
-            b'C' | b'c' => vec![Complex::new(1.0, -1.0)], // 1-i
-            b'G' | b'g' => vec![Complex::new(-1.0, 1.0)], // -1+i
-            b'T' | b't' => vec![Complex::new(-1.0, -1.0)],// -1-i
-            _ => vec![Complex::new(0.0, 0.0)],            // 0+0i
+            b'A' | b'a' => Complex::new(1.0, 1.0),  // 1+i
+            b'C' | b'c' => Complex::new(1.0, -1.0), // 1-i
+            b'G' | b'g' => Complex::new(-1.0, 1.0), // -1+i
+            b'T' | b't' => Complex::new(-1.0, -1.0),// -1-i
+            _ => Complex::new(0.0, 0.0),            // 0+0i
         }
     }
 }
 
-pub fn convert_to_signal(sequence: &mut Vec<u8>) -> Vec<Vec<Complex<f64>>> { // Vec<Vec<bool>>
+pub fn convert_to_signal(sequence: &Vec<u8>) -> Vec<Complex<f64>> {
     let converter = Converter;
-    let mut converted_sequence = Vec::with_capacity(sequence.len());
-    converted_sequence.par_extend(sequence.par_iter_mut().map(|x| converter.convert(*x)));
-    converted_sequence
+    let mut signal = Vec::with_capacity(sequence.len());
+
+    sequence.par_iter()
+        .map(|&x| converter.convert(x))
+        .collect_into_vec(&mut signal);
+
+    signal
+}
+
+pub fn read_sequence<P: AsRef<Path>>(file_path: P, target_seqid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut sequence = Vec::new();
+    let mut is_target_sequence = false;
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.starts_with('>') {
+            if is_target_sequence {
+                break;
+            }
+            let seqid = line[1..].split_whitespace().next().unwrap_or("");
+            is_target_sequence = seqid == target_seqid;
+        } else if is_target_sequence {
+            sequence.extend(line.trim().bytes().filter(|&b| b != b' ' && b != b'\t'));
+        }
+    }
+
+    if sequence.is_empty() {
+        Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Sequence with ID '{}' not found", target_seqid),
+        )))
+    } else {
+        Ok(sequence)
+    }
 }
 
 pub fn transpose(matrix: Vec<Vec<f64>>) -> Vec<Vec<f64>> {

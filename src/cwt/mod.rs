@@ -1,55 +1,72 @@
 use std::f64::consts::PI;
+use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
 use ndarray::{Array, Array1, s, Array2, Axis};
 use rustfft::{FftPlanner, num_complex::Complex};
 use sys_info::mem_info;
-
-use std::sync::{Arc, Mutex};
+use log::{debug, info};
 use std::iter::Iterator;
 
-#[derive(Clone)]
+// Define constants
+const OMEGA_0: f64 = 6.0;
+
+// Params struct with periods
+#[derive(Clone, Debug)]
 pub struct Params {
     pub num: usize,
-    pub tradeoff: f64,
-    pub t_values: Vec<f64>,
+    pub periods: Vec<f64>, // List of periods
 }
 
+// Function to convert period to scale
+fn period_to_scale(t: f64) -> f64 {
+    (OMEGA_0 * t) / (2.0 * PI)
+}
+
+fn pairwise_multiply(a: &[f64], b: &[Complex<f64>]) -> Vec<Complex<f64>> {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).collect()
+}
+
+// linspace function
 pub fn linspace(start: f64, stop: f64, num: usize) -> Array1<f64> {
+    if num == 1 {
+        return Array::from_elem(1, start);
+    }
     let delta = (stop - start) / ((num - 1) as f64);
-    Array::from_shape_fn(num, |i| stop - (i as f64) * delta) // TODO: optimize it to capacity vector
+    Array::from_shape_fn(num, |i| start + (i as f64) * delta) // Correct linspace implementation
 }
 
-fn psi(wavelet_length: &f64, s: f64) -> Array1<Complex<f64>> {
-    let kappa_sigma = (-0.5 * s * s).exp();
-    let c_sigma = (1.0 + (-s*s).exp() - 2.0*((-0.75*s*s).exp())).powf(-0.5);
-    let i_s = Complex::new(0.0, s as f64);
+// Morlet wavelet function
+fn psi(s: f64) -> Array1<Complex<f64>> {
+    //let wl = (OMEGA_0 * s).round() as usize; // Adjust t range based on scale
+    let t = linspace(-OMEGA_0 * s, OMEGA_0 * s, 2*OMEGA_0 as usize * s as usize); // Adjust t range based on scale
 
-    let t = linspace(-5.0,5.0, (*wavelet_length) as usize);
-    // HERE: -5.0: 5.0 implies bandwith 10 for mother wavelet; multiply 10 with input
-    // TODO: parameter coule be changed
-    
-    // Psi = c_sigma * (pi^(-1/4))* e^(-1/2 * t^2) * (e^(i*s*t) - kappa_sigma)
-    let coeff = Complex::new(c_sigma * (PI.powf(-0.25)), 0.0);
-    let part1 = t.mapv(|x| ((-0.5 * x * x) + i_s*x).exp()).mapv(|x| coeff * x);
-    let part2 = c_sigma * (PI.powf(-0.25)) * kappa_sigma * t.mapv(|x| (-0.5 * x * x).exp());
-    part1 - part2
+    let coeff = (PI.powf(-0.25)) / s.sqrt();
+    let exp_term = t.mapv(|x| (-0.5 * (x / s).powi(2)).exp());
+    let cos_term = t.mapv(|x| Complex::new(0.0, OMEGA_0 * x / s).exp());
+
+    let p = Array1::from_vec(pairwise_multiply(&exp_term.to_vec(), &cos_term.to_vec()));
+    let psi = Complex::new(coeff, 0.0) * p;
+    psi
 }
 
-fn wavelet_convolution(tup: (&Array1<Complex<f64>>, f64), s: f64) -> Array1<f64> {
-    let f = tup.0; // f is the signal
-    let wavelet_length = tup.1; // s is the scale
+// Wavelet convolution using FFT
+fn wavelet_convolution(tup: (&Vec<Complex<f64>>, f64)) -> Array1<f64> {
+    let f = Array1::from_vec(tup.0.clone()); // f is the signal
+    let wavelet_size = tup.1;
     let f_len = f.len();
+    let h = psi(wavelet_size);
 
-    let mut f_hat = Array1::zeros(f_len + wavelet_length as usize);
-    f_hat.slice_mut(s![..f_len]).assign(f);
-    let h = psi(&wavelet_length, s as f64);
-    //let h = psi(&wavelet_length, s as f64) * kaiser_window(&wavelet_length, 14.0);
-    let mut h_hat = Array1::zeros(f_len + wavelet_length as usize);
+    let fft_len = f_len + h.len();
+
+    debug!("Signal length: {}, Wavelet size: {}", f_len, (wavelet_size /OMEGA_0).round());
+    let mut f_hat = Array1::zeros(fft_len);
+    f_hat.slice_mut(s![..f_len]).assign(&f);
+    let mut h_hat = Array1::zeros(fft_len);
     h_hat.slice_mut(s![..h.len()]).assign(&h);
 
     let mut planner = FftPlanner::new();
-    let fft_len = f_len + wavelet_length as usize;
+
     let fft = planner.plan_fft_forward(fft_len);
     let ifft = planner.plan_fft_inverse(fft_len);
 
@@ -63,48 +80,67 @@ fn wavelet_convolution(tup: (&Array1<Complex<f64>>, f64), s: f64) -> Array1<f64>
 
     ifft.process(&mut result_complex);
 
-    let result_real: Vec<f64> = result_complex.iter().map(|&val| (val.re*val.re + val.im*val.im).sqrt()).collect();
-    let result_view = Array1::from_shape_vec(fft_len, result_real).unwrap();
-    let start = wavelet_length as usize / 2;
+    let result_norm: Vec<f64> = result_complex.iter().map(|&val| val.norm()).collect();
+    let result_view = Array1::from_shape_vec(fft_len, result_norm).unwrap();
+    let start = h.len() / 2;
     let end = start + f_len;
     result_view.slice(s![start..end]).to_owned()
-
 }
 
-fn cwt_perform(f: &Array1<Complex<f64>>, opt: &Params) -> Array2<f64> {
+// Perform CWT
+fn cwt_perform(f: &Vec<Complex<f64>>, opt: &Params) -> Array2<f64> {
     let f_len = f.len();
-    let t_values = opt.t_values.clone();
+    let periods = &opt.periods;
 
-    // Initialize result_2d array
-    let result_2d = Arc::new(Mutex::new(Array2::zeros((t_values.len(), f_len))));
+    let result_2d = Arc::new(Mutex::new(Array2::zeros((f_len, periods.len()))));
 
-    // Perform wavelet convolution and assign results directly to result_2d
-    t_values.par_iter().enumerate().for_each(|(i, &t)| {
-        let row = wavelet_convolution((&f, t), opt.tradeoff);
-        result_2d.lock().unwrap().slice_mut(s![i, ..]).assign(&row);
+    periods.par_iter().enumerate().for_each(|(i, &t)| {
+        let scale = period_to_scale(t);
+        let row = wavelet_convolution((&f, scale));
+        result_2d.lock().unwrap().slice_mut(s![.., i]).assign(&row);
     });
 
     let result_cwt_perform = result_2d.lock().unwrap();
     result_cwt_perform.to_owned()
 }
 
+// Normalize function (optional)
 pub fn _normalize(matrix: &mut Array2<f64>) {
-  for mut row in matrix.axis_iter_mut(Axis(0)) {
-        let min = row.fold(f64::MAX, |a, &b| a.min(b));
-        let max = row.fold(f64::MIN, |a, &b| a.max(b));
-        let range = max - min;
-        
-        if range != 0.0 {
-            row.mapv_inplace(|x| (x - min) / range);
-        } else {
-            row.fill(0.5);
-        }
-    }
+    matrix.axis_iter_mut(Axis(0))
+        .into_par_iter()
+        .for_each(|mut row| {
+            let min = row.fold(f64::MAX, |a, &b| a.min(b));
+            let max = row.fold(f64::MIN, |a, &b| a.max(b));
+            let range = max - min;
+
+            if range != 0.0 {
+                row.mapv_inplace(|x| (x - min) / range);
+            } else {
+                row.fill(0.5);
+            }
+        });
 }
 
+// Standardize function (optional)
+pub fn _standardize(matrix: &mut Array2<f64>) {
+    matrix.axis_iter_mut(Axis(0))
+        .into_par_iter()
+        .for_each(|mut row| {
+            let mean = row.mean().unwrap_or(0.0);
+            let std_dev = row.std(0.0);
+
+            if std_dev != 0.0 {
+                row.mapv_inplace(|x| (x - mean) / std_dev);
+            } else {
+                row.mapv_inplace(|x| x - mean);
+            }
+        });
+}
+
+// CwtIterator struct
 #[derive(Clone)]
 pub struct CwtIterator {
-    sig_seqs: Array2<Complex<f64>>,
+    signal: Vec<Complex<f64>>,
     opt: Params,
     current_batch: usize,
     batch_size: usize,
@@ -112,37 +148,31 @@ pub struct CwtIterator {
 
 impl CwtIterator {
     pub fn new(seq: &mut Vec<u8>, opt: &Params) -> Self {
-        let mut sig_seqs = super::seq::convert_to_signal(seq);
-        //println!("sig_seqs: {:?}", sig_seqs.len());
-        //let (overlap, n) = find_size(sig_seqs.len(), opt.batch_size);
+        let signal = super::seq::convert_to_signal(seq);
         let opt_clone = opt.clone();
-        // Convert Vec<Vec<u8>> to Array2<bool>
-        let sig_seqs: Array2<Complex<f64>> = Array::from_shape_vec((sig_seqs.len(), sig_seqs[0].len()), sig_seqs.par_iter_mut().flatten().map(|x| *x).collect()).unwrap();
-        
+
         let mem = mem_info().expect("Failed to get memory info");
 
-        
         let available_ram = mem.free; // KB
-        let ram_for_batches = available_ram as f64 * 0.3; // 30% of available RAM
+        let ram_for_batches = available_ram as f64 * 0.5; // 50% of available RAM
 
-        
         let size_of_complex = std::mem::size_of::<Complex<f64>>() as f64; // size of Complex<f64> in bytes
-        
-        let inner_vec_size = opt.num;
-        let size_of_inner_vec = inner_vec_size as f64 * size_of_complex; // 바이트 단위
-        
+
+        let inner_vec_size = opt_clone.periods.len(); // Number of periods
+        let size_of_inner_vec = inner_vec_size as f64 * size_of_complex; // Byte
+
         let max_inner_vecs_in_batch = (ram_for_batches * 1024.0) / size_of_inner_vec;
 
         let fbatch_size: usize;
-        if max_inner_vecs_in_batch < sig_seqs.dim().0 as f64 {
+        if max_inner_vecs_in_batch < signal.len() as f64 {
             fbatch_size = max_inner_vecs_in_batch.floor() as usize;
         }
         else {
-            fbatch_size = sig_seqs.dim().0;
+            fbatch_size = signal.len();
         }
 
         CwtIterator {
-            sig_seqs,
+            signal,
             opt: opt_clone,
             current_batch: 0,
             batch_size: fbatch_size,
@@ -150,32 +180,170 @@ impl CwtIterator {
     }
 
     pub fn iter(&self) -> CwtIterator {
-        //just like ordinary iter
         self.clone()
     }
 }
 
 impl Iterator for CwtIterator {
-    type Item = Array2<f64>;
+    type Item = Array2<f64>; // Return CWT result and period list
 
     fn next(&mut self) -> Option<Self::Item> {
-
-        if self.current_batch > (self.sig_seqs.dim().0 / self.batch_size) {
-            return None
+        if self.current_batch >= (self.signal.len() + self.batch_size - 1) / self.batch_size {
+            return None;
         }
-
+        info!("Current batch: {}", self.current_batch + 1);
 
         let start = self.current_batch * self.batch_size;
-        let end = std::cmp::min(start + self.batch_size, self.sig_seqs.dim().0);
-        let batch = self.sig_seqs.slice(s![start..end, ..]).to_owned();
-        let mut batch_cwt = Array2::<f64>::zeros((self.opt.num, batch.dim().0));
-        batch.axis_iter(Axis(1)).for_each(|f| {
-            let one_base_result = cwt_perform(&f.to_owned(), &self.opt);
-            batch_cwt = &batch_cwt + &one_base_result;
-        });
+        let end = std::cmp::min(start + self.batch_size, self.signal.len());
+        let f = self.signal[start..end].to_vec();
+
+        let mut batch_cwt = cwt_perform(&f, &self.opt);
 
         self.current_batch += 1;
-        _normalize(&mut batch_cwt);
-        Some(batch_cwt)
+        _standardize(&mut batch_cwt);
+        //_normalize(&mut batch_cwt);
+        Some(batch_cwt) // Return period list
+    }
+}
+
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::arr2;
+
+    // Test _normalize function
+    #[test]
+    fn test_normalize_simple() {
+        let mut matrix = arr2(&[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+        _normalize(&mut matrix);
+        
+        let expected = arr2(&[[0.0, 0.5, 1.0], [0.0, 0.5, 1.0]]);
+        assert_eq!(matrix, expected);
+    }
+}
+
+#[cfg(test)]
+mod tests_2 {
+    use super::*;
+    use ndarray::array;
+    use num_complex::Complex;
+
+    #[test]
+    fn test_linspace_basic() {
+        let result = linspace(0.0, 10.0, 5);
+        let expected = array![10.0, 7.5, 5.0, 2.5, 0.0];
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_linspace_single_point() {
+        let result = linspace(0.0, 0.0, 1);
+        let expected = array![0.0];
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_psi_basic() {
+        let wavelet_length = 100;
+        let s = 1.0;
+        let psi_result = psi(s);
+        assert_eq!(psi_result.len(), wavelet_length as usize);
+    }
+
+    #[test]
+    fn test_wavelet_convolution_basic() {
+        let signal = vec![Complex::new(1.0, 0.0); 100];
+        let wavelet_length = 50.0;
+        let result = wavelet_convolution((&signal, wavelet_length));
+        assert_eq!(result.len(), signal.len());
+    }
+
+    #[test]
+    fn test_wavelet_convolution_zero_signal() {
+        let signal = vec![Complex::new(0.0, 0.0); 100];
+        let wavelet_length = 50.0;
+        let result = wavelet_convolution((&signal, wavelet_length));
+        assert!(result.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_cwt_perform_basic() {
+        let signal = vec![Complex::new(1.0, 0.0); 100];
+        let params = Params {
+            num: 10,
+            periods: vec![1.0, 2.0, 3.0],
+        };
+        let result = cwt_perform(&signal, &params);
+        assert_eq!(result.shape(), &[3, 100]);
+    }
+
+    #[test]
+    fn test_normalize_basic() {
+        let mut matrix = array![[1.0, 2.0], [3.0, 4.0]];
+        _normalize(&mut matrix);
+        let expected = array![[0.0, 1.0], [0.0, 1.0]];
+        assert_eq!(matrix, expected);
+    }
+
+    #[test]
+    fn test_normalize_zero_range() {
+        let mut matrix = array![[2.0, 2.0], [2.0, 2.0]];
+        _normalize(&mut matrix);
+        let expected = array![[0.5, 0.5], [0.5, 0.5]];
+        assert_eq!(matrix, expected);
+    }
+
+    #[test]
+    fn test_standardize_basic() {
+        let mut matrix = array![[1.0, 2.0], [3.0, 4.0]];
+        _standardize(&mut matrix);
+        let mean = matrix.mean().unwrap();
+        let std_dev = matrix.std(0.0);
+        assert!((mean - 0.0).abs() < 1e-6);
+        assert!((std_dev - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_cwt_iterator_large_signal() {
+        let mut seq = vec![1u8; 10_000];
+        let params = Params {
+            num: 10,
+            periods: vec![1.0, 2.0, 3.0],
+        };
+        // Assuming mem_info and convert_to_signal are available
+        let iterator = CwtIterator::new(&mut seq, &params);
+        let mut total_length = 0;
+        for batch in iterator {
+            total_length += batch.shape()[1];
+        }
+        assert_eq!(total_length, seq.len());
+    }
+
+    #[test]
+    fn test_cwt_calc () {
+    // Create a simple signal: a sine wave
+    let signal_length = 100;
+    let frequency = 5.0;
+    let time = linspace(0.0, 1.0, signal_length);
+    let signal: Vec<Complex<f64>> = time
+        .iter()
+        .map(|&t| Complex::new((2.0 * PI * frequency * t).sin(), 0.0))
+        .collect();
+
+    // Define parameters for CWT
+    let params = Params {
+        num: signal_length,
+        periods: vec![1.0, 2.0, 3.0, 0.1], // Scales
+    };
+
+    // Perform CWT
+    let cwt_result = cwt_perform(&signal, &params);
+
+    // Print the shape of the result and a portion of the data
+    println!("CWT Result Shape: {:?}", cwt_result.shape());
+    println!("CWT Result (First Scale): {:?}", cwt_result.row(0));
     }
 }
