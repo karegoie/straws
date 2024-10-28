@@ -84,7 +84,7 @@ fn process_fasta<P: AsRef<Path>>(
                 process_sequence_fasta(&current_seq, &current_id, params, &opt, processed_seqnames)?;
                 current_seq.clear();
             }
-            current_id = line[1..].to_string(); // Remove '>' character
+            current_id = line[1..].trim().split_ascii_whitespace().next().unwrap().to_string();
             info!("Found sequence ID: {}", current_id);
         } else {
             current_seq.extend(line.bytes());
