@@ -14,6 +14,7 @@ use ndarray::prelude::*;
 use rayon::prelude::*;
 use tempfile::NamedTempFile;
 use memmap2::MmapOptions;
+use byteorder::{WriteBytesExt, LittleEndian};
 use log::{info, warn, error, debug, LevelFilter};
 
 /// Command-line options structure.
@@ -66,6 +67,7 @@ struct SequenceResult {
 fn process_fasta<P: AsRef<Path>>(
     path: P,
     params: &cwt::Params,
+    opt: &Opt,
     processed_seqnames: &Arc<Mutex<Vec<String>>>,
 ) -> Result<(), std::io::Error> {
     info!("Opening FASTA file: {:?}", path.as_ref());
@@ -79,7 +81,7 @@ fn process_fasta<P: AsRef<Path>>(
         if line.starts_with('>') {
             if !current_seq.is_empty() {
                 debug!("Processing sequence ID: {}", current_id);
-                process_sequence_fasta(&current_seq, &current_id, params, processed_seqnames)?;
+                process_sequence_fasta(&current_seq, &current_id, params, &opt, processed_seqnames)?;
                 current_seq.clear();
             }
             current_id = line[1..].to_string(); // Remove '>' character
@@ -91,7 +93,7 @@ fn process_fasta<P: AsRef<Path>>(
 
     if !current_seq.is_empty() {
         debug!("Processing last sequence ID: {}", current_id);
-        process_sequence_fasta(&current_seq, &current_id, params, processed_seqnames)?;
+        process_sequence_fasta(&current_seq, &current_id, params, &opt, processed_seqnames)?;
     }
 
     info!("Completed processing FASTA file.");
@@ -110,6 +112,7 @@ fn process_sequence_fasta(
     seq: &[u8],
     id: &str,
     params: &cwt::Params,
+    opt: &Opt,
     processed_seqnames: &Arc<Mutex<Vec<String>>>,
 ) -> Result<(), std::io::Error> {
     debug!("Creating temporary file for sequence ID: {}", id);
@@ -121,12 +124,19 @@ fn process_sequence_fasta(
     let cwt_iterator = cwt::CwtIterator::new(&mut seq_copy, params);
 
     let mut shannon_diversity = Vec::new();
+    let cwt_file = File::create(format!("{}.cwt", id))?;
+    let mut writer = BufWriter::with_capacity(1024 * 1024 * 1024, cwt_file);
+    let mut length = 0;
 
     for batch in cwt_iterator.iter() {
         for row in batch.axis_iter(Axis(0)) {
+            for val in row.iter() {
+                writer.write_f64::<LittleEndian>(*val)?;
+            }
             let diversity = seq::calculate_shannon_diversity_for_vector(&row.to_vec());
             shannon_diversity.push(diversity);
             debug!("Calculated Shannon diversity: {}", diversity);
+            length += 1;
         }
     }
 
@@ -135,6 +145,8 @@ fn process_sequence_fasta(
         seqnames.push(seqname);
         debug!("Added sequence name to processed_seqnames.");
     }
+    let mut conf_file = File::create(format!("{}.conf", id))?;
+    conf_file.write_all(format!("{},{},{}", id, length, opt.number).as_bytes())?;
 
     info!("Processed sequence ID: {}", id);
     Ok(())
@@ -423,7 +435,7 @@ fn main() -> Result<(), std::io::Error> {
 
     if (opt.input.ends_with(".fasta") || opt.input.ends_with(".fa")) && !opt.filter {
         info!("Processing FASTA file without filtering.");
-        process_fasta(&opt.input, &params, &processed_seqnames)?;
+        process_fasta(&opt.input, &params, &opt, &processed_seqnames)?;
     } else if (opt.input.ends_with(".fastq") || opt.input.ends_with(".fq")) && opt.filter {
         info!("Processing FASTQ file with filtering.");
         // Shared vector to collect processing results
