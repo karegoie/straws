@@ -47,7 +47,8 @@ def parse_arguments():
 def load_configuration(conf_path):
     """Load the shape configuration from a .conf file."""
     try:
-        shape = np.loadtxt(conf_path, delimiter=',', max_rows=1, dtype=int)
+        shape = np.loadtxt(conf_path, delimiter=',', max_rows=1, dtype=object)
+        shape = [int(n) for n in shape[1:]]
         logging.info(f"Loaded shape: {shape}")
         return shape
     except Exception as e:
