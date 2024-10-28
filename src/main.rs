@@ -22,7 +22,7 @@ use log::{info, warn, error, debug, LevelFilter};
 #[structopt(name = "straws", about = "Size-free Tandem Repeat analysis using Continuous Wavelet Transform and Signaling")]
 struct Opt {
     /// Input sequence file
-    #[structopt(short, long, default_value = "input.fasta")]
+    #[structopt(short, long)]
     input: String,
 
     /// Start position (integer)
