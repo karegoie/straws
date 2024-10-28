@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import subprocess
+import matplotlib.pyplot as plt
+import argparse
+from pathlib import Path
+import sys
+import logging
+
+def setup_logging():
+    """Set up the logging configuration."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s: %(message)s'
+    )
+
+def parse_arguments():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description='Process CWT data and generate a heatmap.'
+    )
+    parser.add_argument(
+        'filename',
+        type=str,
+        help='Input filename (without extension)'
+    )
+    parser.add_argument(
+        '-s', '--start',
+        type=int,
+        default=None,
+        help='Start column index (1-based)'
+    )
+    parser.add_argument(
+        '-e', '--end',
+        type=int,
+        default=None,
+        help='End column index'
+    )
+    parser.add_argument(
+        '-o', '--output',
+        type=str,
+        default=None,
+        help='Output image filename (defaults to <name>.png)'
+    )
+    return parser.parse_args()
+
+def run_subprocess(command):
+    """Run a subprocess and handle errors."""
+    try:
+        logging.info(f"Running subprocess: {' '.join(command)}")
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        logging.debug(result.stdout)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Subprocess failed: {e.stderr}")
+        sys.exit(1)
+
+def load_configuration(conf_path):
+    """Load the shape configuration from a .conf file."""
+    try:
+        shape = np.loadtxt(conf_path, delimiter=',', max_rows=1, dtype=int)
+        logging.info(f"Loaded shape: {shape}")
+        return shape
+    except Exception as e:
+        logging.error(f"Failed to load configuration from {conf_path}: {e}")
+        sys.exit(1)
+
+def load_cwt_matrix(cwt_path, shape):
+    """Load the CWT matrix from a .cwt file."""
+    try:
+        cwt_matrix = np.fromfile(cwt_path, dtype='<f8').reshape(shape)
+        logging.info(f"CWT matrix loaded with shape {cwt_matrix.shape}")
+        return cwt_matrix
+    except Exception as e:
+        logging.error(f"Failed to load CWT matrix from {cwt_path}: {e}")
+        sys.exit(1)
+
+def plot_cwt(cwt_matrix, start, end, output_path):
+    """Plot the CWT matrix and save as an image."""
+    plt.figure(figsize=(10, 6))
+    
+    if start is not None and end is not None:
+        logging.info(f"Plotting columns from {start} to {end}")
+        data_to_plot = cwt_matrix.T[:, start-1:end]
+    else:
+        logging.info("Plotting entire CWT matrix")
+        data_to_plot = cwt_matrix.T
+
+    plt.imshow(data_to_plot, cmap='viridis', aspect='auto', interpolation='none')
+    plt.colorbar(label='CWT Value')
+    plt.xlabel('Time')
+    plt.ylabel('Frequency')
+    plt.title('Continuous Wavelet Transform (CWT)')
+
+    plt.savefig(output_path)
+    logging.info(f"Plot saved to {output_path}")
+
+def main():
+    setup_logging()
+    args = parse_arguments()
+
+    input_path = Path(args.filename)
+    if not input_path.exists():
+        logging.error(f"Input file {input_path} does not exist.")
+        sys.exit(1)
+    
+    base_name = input_path.stem
+    conf_file = Path(f"./{base_name}.conf")
+    cwt_file = Path(f"./{base_name}.cwt")
+    
+    if not conf_file.exists():
+        logging.error(f"Configuration file {conf_file} does not exist.")
+        sys.exit(1)
+    if not cwt_file.exists():
+        logging.error(f"CWT file {cwt_file} does not exist.")
+        sys.exit(1)
+
+    # Run the external subprocess
+    subprocess_command = ["./target/release/strauws", "-i", base_name]
+    run_subprocess(subprocess_command)
+
+    # Load data
+    shape = load_configuration(conf_file)
+    cwt_matrix = load_cwt_matrix(cwt_file, shape)
+
+    # Determine plotting range
+    if args.start and args.end:
+        start = args.start
+        end = args.end
+    elif (args.start is None and args.end is None):
+        start = end = None
+    else:
+        logging.error("Both start and end must be provided together.")
+        sys.exit(1)
+
+    # Determine output filename
+    output_filename = args.output if args.output else f"{base_name}.png"
+    output_path = Path(output_filename)
+
+    # Plot and save the CWT matrix
+    plot_cwt(cwt_matrix, start, end, output_path)
+
+if __name__ == "__main__":
+    main()
