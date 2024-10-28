@@ -166,7 +166,6 @@ fn process_fastq<P: AsRef<Path> + Sync>(
     path: P,
     params: &cwt::Params,
     processed_seqnames: &Arc<Mutex<Vec<String>>>,
-    opt: &Opt,
     results: &Arc<Mutex<Vec<SequenceResult>>>,
 ) -> Result<(), std::io::Error> {
     info!("Opening FASTQ file: {:?}", path.as_ref());
@@ -269,7 +268,7 @@ fn process_fastq<P: AsRef<Path> + Sync>(
             }
             current_pos = qual_end + 1;
             
-            if let Err(e) = process_sequence_fastq_with_id(id, seq, params, processed_seqnames, opt, results) {
+            if let Err(e) = process_sequence_fastq_with_id(id, seq, params, processed_seqnames, results) {
                 error!("Error processing sequence: {}", e);
             }
 
@@ -302,7 +301,6 @@ fn process_sequence_fastq_with_id(
     seq: &[u8], 
     params: &cwt::Params, 
     processed_seqnames: &Arc<Mutex<Vec<String>>>, 
-    opt: &Opt, 
     results: &Arc<Mutex<Vec<SequenceResult>>>
 ) -> Result<(), std::io::Error> {
     let id_str = match std::str::from_utf8(id) {
@@ -314,7 +312,7 @@ fn process_sequence_fastq_with_id(
     };
     debug!("Processing sequence ID: {}", id_str);
 
-    match process_sequence_fastq(seq, &id_str, params, processed_seqnames, opt) {
+    match process_sequence_fastq(seq, &id_str, params, processed_seqnames) {
         Ok(Some(shannon_diversity_avg)) => {
             // Push the result to the shared vector
             let sequence = seq.to_vec();
@@ -358,7 +356,6 @@ fn process_sequence_fastq(
     id: &str,
     params: &cwt::Params,
     processed_seqnames: &Arc<Mutex<Vec<String>>>,
-    opt: &Opt,
 ) -> Result<Option<f64>, std::io::Error> {
     debug!("Creating temporary file for sequence ID: {}", id);
     let mut seq_copy = seq.to_vec();
@@ -431,7 +428,7 @@ fn main() -> Result<(), std::io::Error> {
         info!("Processing FASTQ file with filtering.");
         // Shared vector to collect processing results
         let results = Arc::new(Mutex::new(Vec::new()));
-        process_fastq(&opt.input, &params, &processed_seqnames, &opt, &results)?;
+        process_fastq(&opt.input, &params, &processed_seqnames, &results)?;
 
         // Collect the results
         let mut results_locked = results.lock().unwrap();
