@@ -191,7 +191,7 @@ impl Iterator for CwtIterator {
         if self.current_batch >= (self.signal.len() + self.batch_size - 1) / self.batch_size {
             return None;
         }
-        info!("Current batch: {}", self.current_batch + 1);
+        debug!("Current batch: {}", self.current_batch + 1);
 
         let start = self.current_batch * self.batch_size;
         let end = std::cmp::min(start + self.batch_size, self.signal.len());
