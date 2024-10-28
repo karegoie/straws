@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use ndarray::{Array, Array1, s, Array2, Axis};
 use rustfft::{FftPlanner, num_complex::Complex};
 use sys_info::mem_info;
-use log::{debug, info};
+use log::debug;
 use std::iter::Iterator;
 
 // Define constants
