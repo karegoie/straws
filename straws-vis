@@ -78,8 +78,8 @@ def plot_cwt(cwt_matrix, start, end, output_path):
 
     plt.imshow(data_to_plot, cmap='viridis', aspect='auto', interpolation='none')
     plt.colorbar(label='CWT Value')
-    plt.xlabel('Time')
-    plt.ylabel('Frequency')
+    plt.xlabel('Genomic Position (bp)')
+    plt.ylabel('Wavelet Size')
     plt.title('Continuous Wavelet Transform (CWT)')
 
     plt.savefig(output_path)
