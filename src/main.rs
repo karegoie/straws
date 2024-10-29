@@ -452,13 +452,8 @@ fn main() -> Result<(), std::io::Error> {
 
     if opt.input.ends_with(".fasta") || opt.input.ends_with(".fa") {
         // Open BED file for writing if filtering is enabled
-        let bed_writer = if opt.filter {
-            let bed_file = File::create(format!("{}.bed", &opt.output))?;
-            Arc::new(Mutex::new(BufWriter::new(bed_file)))
-        } else {
-            // Create a dummy writer if not filtering
-            Arc::new(Mutex::new(BufWriter::new(File::create("/dev/null")?)))
-        };
+        let bed_file = File::create(format!("{}.bed", &opt.output))?;
+        let bed_writer = Arc::new(Mutex::new(BufWriter::new(bed_file)));
         info!("Processing FASTA file.");
         process_fasta(&opt.input, &params, &opt, &processed_seqnames, &bed_writer)?;
     } else if (opt.input.ends_with(".fastq") || opt.input.ends_with(".fq")) && opt.filter {
