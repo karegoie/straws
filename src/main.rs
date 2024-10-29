@@ -148,7 +148,9 @@ fn process_sequence_fasta(
             let mut sorted_diversity = shannon_diversity.clone();
             sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let index = (sorted_diversity.len() as f64 * 0.01).ceil() as usize;
-            sorted_diversity[index.min(sorted_diversity.len() - 1)]
+            let threshold = sorted_diversity[index.min(sorted_diversity.len() - 1)];
+            info!("Calculated threshold: {}", threshold);
+            threshold
         },
     };
     let mut in_low_diversity_region = false;
@@ -497,7 +499,9 @@ fn main() -> Result<(), std::io::Error> {
                     let mut sorted_diversity = results_locked.iter().map(|d| d.diversity).collect::<Vec<_>>();
                     sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                     let index = (sorted_diversity.len() as f64 * 0.01).ceil() as usize;
-                    sorted_diversity[index.min(sorted_diversity.len() - 1)]
+                    let threshold = sorted_diversity[index.min(sorted_diversity.len() - 1)];
+                    info!("Calculated threshold: {}", threshold);
+                    threshold
                 },
             };
             let mut fasta_file = BufWriter::new(File::create(format!("{}.fasta", &opt.output))?);
