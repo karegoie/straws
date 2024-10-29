@@ -197,11 +197,11 @@ impl Iterator for CwtIterator {
         let end = std::cmp::min(start + self.batch_size, self.signal.len());
         let f = self.signal[start..end].to_vec();
 
-        let batch_cwt = cwt_perform(&f, &self.opt);
+        let mut batch_cwt = cwt_perform(&f, &self.opt);
 
         self.current_batch += 1;
         //_standardize(&mut batch_cwt);
-        //_normalize(&mut batch_cwt);
+        _normalize(&mut batch_cwt);
         Some(batch_cwt) // Return period list
     }
 }
