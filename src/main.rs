@@ -42,8 +42,8 @@ struct Opt {
     filter: bool,
 
     /// Threshold for filtering (required if --filter is set)
-    #[structopt(long = "threshold", required_if("filter", "true"))]
-    threshold: Option<f64>,
+    #[structopt(long = "threshold", required_if("filter", "true"), default_value="0.1")]
+    threshold: f64,
 
     /// Extract sequences below threshold into FASTA (requires --filter)
     #[structopt(long = "extract", requires("filter"))]
@@ -142,7 +142,7 @@ fn process_sequence_fasta(
 
     // Process Shannon diversity for BED output if filtering is enabled
     if opt.filter {
-        let threshold = opt.threshold.unwrap();
+        let threshold = opt.threshold.clone();
         let mut in_low_diversity_region = false;
         let mut start_pos = 0;
         let mut sum_diversity = 0.0;
@@ -485,7 +485,7 @@ fn main() -> Result<(), std::io::Error> {
 
         // If extract is enabled, write sequences below threshold to FASTA
         if opt.extract {
-            let threshold = opt.threshold.unwrap();
+            let threshold = opt.threshold.clone();
             let mut fasta_file = BufWriter::new(File::create(format!("{}.fasta", &opt.output))?);
             for result in results_locked.iter().filter(|r| r.diversity < threshold) {
                 writeln!(fasta_file, ">{}", result.id)?;
