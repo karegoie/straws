@@ -467,7 +467,11 @@ fn main() -> Result<(), std::io::Error> {
         info!("Total sequences processed: {}", results_locked.len());
 
         // Sort the results by Shannon diversity (ascending)
-        results_locked.sort_by(|a, b| a.diversity.partial_cmp(&b.diversity).unwrap());
+        results_locked.sort_by(|a, b| {
+            a.diversity.partial_cmp(&b.diversity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        
 
         // Write the sorted results to a txt file
         let mut txt_file = BufWriter::new(File::create(format!("{}.txt", &opt.output))?);
