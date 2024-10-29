@@ -48,6 +48,9 @@ struct Opt {
     /// Extract sequences below threshold into FASTA (requires --filter)
     #[structopt(long = "extract", requires("filter"))]
     extract: bool,
+    
+    #[structopt(short, long, default_value = "output")]
+    output: String,
 }
 
 /// Structure to hold sequence processing results.
@@ -58,17 +61,12 @@ struct SequenceResult {
 }
 
 /// Processes a FASTA file by reading each sequence and processing it.
-///
-/// # Arguments
-///
-/// * `path` - Path to the FASTA file.
-/// * `params` - Parameters for the Continuous Wavelet Transform (CWT).
-/// * `processed_seqnames` - Shared vector to store processed sequence names.
 fn process_fasta<P: AsRef<Path>>(
     path: P,
     params: &cwt::Params,
     opt: &Opt,
     processed_seqnames: &Arc<Mutex<Vec<String>>>,
+    bed_writer: &Arc<Mutex<BufWriter<File>>>, // Added bed_writer as a shared resource
 ) -> Result<(), std::io::Error> {
     info!("Opening FASTA file: {:?}", path.as_ref());
     let file = File::open(&path)?;
@@ -81,7 +79,7 @@ fn process_fasta<P: AsRef<Path>>(
         if line.starts_with('>') {
             if !current_seq.is_empty() {
                 debug!("Processing sequence ID: {}", current_id);
-                process_sequence_fasta(&current_seq, &current_id, params, &opt, processed_seqnames)?;
+                process_sequence_fasta(&current_seq, &current_id, params, opt, processed_seqnames, bed_writer)?;
                 current_seq.clear();
             }
             current_id = line[1..].trim().split_ascii_whitespace().next().unwrap().to_string();
@@ -93,7 +91,7 @@ fn process_fasta<P: AsRef<Path>>(
 
     if !current_seq.is_empty() {
         debug!("Processing last sequence ID: {}", current_id);
-        process_sequence_fasta(&current_seq, &current_id, params, &opt, processed_seqnames)?;
+        process_sequence_fasta(&current_seq, &current_id, params, opt, processed_seqnames, bed_writer)?;
     }
 
     info!("Completed processing FASTA file.");
@@ -101,19 +99,13 @@ fn process_fasta<P: AsRef<Path>>(
 }
 
 /// Processes a single FASTA sequence.
-///
-/// # Arguments
-///
-/// * `seq` - Byte slice of the sequence.
-/// * `id` - Identifier of the sequence.
-/// * `params` - Parameters for the CWT.
-/// * `processed_seqnames` - Shared vector to store processed sequence names.
 fn process_sequence_fasta(
     seq: &[u8],
     id: &str,
     params: &cwt::Params,
     opt: &Opt,
     processed_seqnames: &Arc<Mutex<Vec<String>>>,
+    bed_writer: &Arc<Mutex<BufWriter<File>>>, // Added bed_writer as a shared resource
 ) -> Result<(), std::io::Error> {
     debug!("Creating temporary file for sequence ID: {}", id);
     let mut seq_copy = seq.to_vec();
@@ -148,16 +140,76 @@ fn process_sequence_fasta(
     let mut conf_file = File::create(format!("{}.conf", id))?;
     conf_file.write_all(format!("{},{},{}", id, length, opt.number).as_bytes())?;
 
+    // Process Shannon diversity for BED output if filtering is enabled
+    if opt.filter {
+        let threshold = opt.threshold.unwrap();
+        let mut in_low_diversity_region = false;
+        let mut start_pos = 0;
+        let mut sum_diversity = 0.0;
+        let mut region_length = 0;
+
+        for (i, &diversity) in shannon_diversity.iter().enumerate() {
+            if diversity < threshold {
+                if !in_low_diversity_region {
+                    in_low_diversity_region = true;
+                    start_pos = i;
+                    sum_diversity = diversity;
+                    region_length = 1;
+                } else {
+                    sum_diversity += diversity;
+                    region_length += 1;
+                }
+            } else {
+                if in_low_diversity_region {
+                    let end_pos = i;
+                    let mean_diversity = sum_diversity / region_length as f64;
+                    let repeat_length = end_pos - start_pos;
+                    // Write BED entry
+                    {
+                        let mut bed_writer = bed_writer.lock().unwrap();
+                        writeln!(
+                            bed_writer,
+                            "{}\t{}\t{}\tr={}:{};l={};s={:.2}",
+                            id,
+                            start_pos,
+                            end_pos,
+                            opt.start,
+                            opt.end,
+                            repeat_length,
+                            mean_diversity
+                        )?;
+                    }
+                    in_low_diversity_region = false;
+                }
+            }
+        }
+        if in_low_diversity_region {
+            let end_pos = shannon_diversity.len();
+            let mean_diversity = sum_diversity / region_length as f64;
+            let repeat_length = end_pos - start_pos;
+            // Write BED entry
+            {
+                let mut bed_writer = bed_writer.lock().unwrap();
+                writeln!(
+                    bed_writer,
+                    "{}\t{}\t{}\tr={}:{};l={};s={:.2}",
+                    id,
+                    start_pos,
+                    end_pos,
+                    opt.start,
+                    opt.end,
+                    repeat_length,
+                    mean_diversity
+                )?;
+            }
+        }
+    }
+
     info!("Processed sequence ID: {}", id);
     Ok(())
 }
 
 /// Reports the progress of sequence processing.
-///
-/// # Arguments
-///
-/// * `total_reads` - Atomic counter of total reads processed.
-/// * `start_time` - Instant when processing started.
 fn report_progress(total_reads: &AtomicUsize, start_time: &Instant) {
     let reads = total_reads.load(Ordering::Relaxed);
     let elapsed = start_time.elapsed();
@@ -166,14 +218,6 @@ fn report_progress(total_reads: &AtomicUsize, start_time: &Instant) {
 }
 
 /// Processes a FASTQ file by reading each sequence and processing it with filtering.
-///
-/// # Arguments
-///
-/// * `path` - Path to the FASTQ file.
-/// * `params` - Parameters for the CWT.
-/// * `processed_seqnames` - Shared vector to store processed sequence names.
-/// * `opt` - Command-line options.
-/// * `results` - Shared vector to store processing results.
 fn process_fastq<P: AsRef<Path> + Sync>(
     path: P,
     params: &cwt::Params,
@@ -187,7 +231,7 @@ fn process_fastq<P: AsRef<Path> + Sync>(
     debug!("Memory-mapping the FASTQ file.");
     let mmap = unsafe { MmapOptions::new().map(&file)? };
 
-    let num_cpus = sys_info::cpu_num().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))? as usize;
+    let num_cpus = sys_info::cpu_num().unwrap_or(4);
     info!("Detected {} CPUs.", num_cpus);
 
     let chunk_size = file_size / num_cpus as u64;
@@ -299,15 +343,6 @@ fn process_fastq<P: AsRef<Path> + Sync>(
 }
 
 /// Processes a single FASTQ sequence with its ID.
-///
-/// # Arguments
-///
-/// * `id` - Byte slice of the sequence ID.
-/// * `seq` - Byte slice of the sequence.
-/// * `params` - Parameters for the CWT.
-/// * `processed_seqnames` - Shared vector to store processed sequence names.
-/// * `opt` - Command-line options.
-/// * `results` - Shared vector to store processing results.
 fn process_sequence_fastq_with_id(
     id: &[u8], 
     seq: &[u8], 
@@ -351,18 +386,6 @@ fn process_sequence_fastq_with_id(
 }
 
 /// Processes a single FASTQ sequence.
-///
-/// # Arguments
-///
-/// * `seq` - Byte slice of the sequence.
-/// * `id` - Identifier of the sequence.
-/// * `params` - Parameters for the CWT.
-/// * `processed_seqnames` - Shared vector to store processed sequence names.
-/// * `opt` - Command-line options.
-///
-/// # Returns
-///
-/// * `Option<f64>` - Returns the average Shannon diversity if calculated.
 fn process_sequence_fastq(
     seq: &[u8], 
     id: &str,
@@ -408,10 +431,6 @@ fn process_sequence_fastq(
 }
 
 /// Entry point of the application.
-///
-/// # Returns
-///
-/// * `Result<(), std::io::Error>` - Returns Ok if successful, or an I/O error.
 fn main() -> Result<(), std::io::Error> {
     // Initialize the logger
     logger::init_logger(LevelFilter::Info).expect("Failed to initialize logger");
@@ -433,9 +452,17 @@ fn main() -> Result<(), std::io::Error> {
 
     let processed_seqnames = Arc::new(Mutex::new(Vec::new()));
 
-    if (opt.input.ends_with(".fasta") || opt.input.ends_with(".fa")) && !opt.filter {
-        info!("Processing FASTA file without filtering.");
-        process_fasta(&opt.input, &params, &opt, &processed_seqnames)?;
+    if opt.input.ends_with(".fasta") || opt.input.ends_with(".fa") {
+        // Open BED file for writing if filtering is enabled
+        let bed_writer = if opt.filter {
+            let bed_file = File::create(format!("{}.bed", &opt.output))?;
+            Arc::new(Mutex::new(BufWriter::new(bed_file)))
+        } else {
+            // Create a dummy writer if not filtering
+            Arc::new(Mutex::new(BufWriter::new(File::create("/dev/null")?)))
+        };
+        info!("Processing FASTA file.");
+        process_fasta(&opt.input, &params, &opt, &processed_seqnames, &bed_writer)?;
     } else if (opt.input.ends_with(".fastq") || opt.input.ends_with(".fq")) && opt.filter {
         info!("Processing FASTQ file with filtering.");
         // Shared vector to collect processing results
@@ -450,7 +477,7 @@ fn main() -> Result<(), std::io::Error> {
         results_locked.sort_by(|a, b| a.diversity.partial_cmp(&b.diversity).unwrap());
 
         // Write the sorted results to a txt file
-        let mut txt_file = BufWriter::new(File::create("output.txt")?);
+        let mut txt_file = BufWriter::new(File::create(format!("{}.txt", &opt.output))?);
         for result in results_locked.iter() {
             writeln!(txt_file, "{},{}", result.id, result.diversity)?;
         }
@@ -459,7 +486,7 @@ fn main() -> Result<(), std::io::Error> {
         // If extract is enabled, write sequences below threshold to FASTA
         if opt.extract {
             let threshold = opt.threshold.unwrap();
-            let mut fasta_file = BufWriter::new(File::create("filtered.fasta")?);
+            let mut fasta_file = BufWriter::new(File::create(format!("{}.fasta", &opt.output))?);
             for result in results_locked.iter().filter(|r| r.diversity < threshold) {
                 writeln!(fasta_file, ">{}", result.id)?;
                 writeln!(fasta_file, "{}", String::from_utf8_lossy(&result.sequence))?;
@@ -468,7 +495,7 @@ fn main() -> Result<(), std::io::Error> {
         }
     } else {
         error!("Unsupported file format or incorrect filtering options.");
-        eprintln!("Unsupported file format or incorrect options. Please use .fasta, .fa without --filter, or .fastq, .fq with --filter.");
+        eprintln!("Unsupported file format or incorrect options. Please use .fasta, .fa with appropriate options, or .fastq, .fq with --filter.");
         return Ok(());
     }
 
