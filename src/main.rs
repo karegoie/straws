@@ -42,8 +42,8 @@ struct Opt {
     filter: bool,
 
     /// Threshold for filtering (required if --filter is set)
-    #[structopt(short, long = "threshold", required_if("filter", "true"), default_value="0.1")]
-    threshold: f64,
+    #[structopt(short, long = "threshold", required_if("filter", "true"))]
+    threshold: Option<f64>,
 
     /// Extract sequences below threshold into FASTA (requires --filter)
     #[structopt(long = "extract", requires("filter"))]
@@ -141,7 +141,16 @@ fn process_sequence_fasta(
     conf_file.write_all(format!("{},{},{}", id, length, opt.number).as_bytes())?;
 
     // Process Shannon diversity for BED output
-    let threshold = opt.threshold.clone();
+    // Set threshold if it's not provided
+    let threshold = match opt.threshold {
+        Some(t) => t,
+        None => {
+            let mut sorted_diversity = shannon_diversity.clone();
+            sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let index = (sorted_diversity.len() as f64 * 0.01).ceil() as usize;
+            sorted_diversity[index.min(sorted_diversity.len() - 1)]
+        },
+    };
     let mut in_low_diversity_region = false;
     let mut start_pos = 0;
     let mut sum_diversity = 0.0;
@@ -482,7 +491,15 @@ fn main() -> Result<(), std::io::Error> {
 
         // If extract is enabled, write sequences below threshold to FASTA
         if opt.extract {
-            let threshold = opt.threshold.clone();
+            let threshold = match opt.threshold {
+                Some(t) => t,
+                None => {
+                    let mut sorted_diversity = results_locked.iter().map(|d| d.diversity).collect::<Vec<_>>();
+                    sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    let index = (sorted_diversity.len() as f64 * 0.01).ceil() as usize;
+                    sorted_diversity[index.min(sorted_diversity.len() - 1)]
+                },
+            };
             let mut fasta_file = BufWriter::new(File::create(format!("{}.fasta", &opt.output))?);
             for result in results_locked.iter().filter(|r| r.diversity < threshold) {
                 writeln!(fasta_file, ">{}", result.id)?;
