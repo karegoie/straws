@@ -141,67 +141,65 @@ fn process_sequence_fasta(
     conf_file.write_all(format!("{},{},{}", id, length, opt.number).as_bytes())?;
 
     // Process Shannon diversity for BED output if filtering is enabled
-    if opt.filter {
-        let threshold = opt.threshold.clone();
-        let mut in_low_diversity_region = false;
-        let mut start_pos = 0;
-        let mut sum_diversity = 0.0;
-        let mut region_length = 0;
+    let threshold = opt.threshold.clone();
+    let mut in_low_diversity_region = false;
+    let mut start_pos = 0;
+    let mut sum_diversity = 0.0;
+    let mut region_length = 0;
 
-        for (i, &diversity) in shannon_diversity.iter().enumerate() {
-            if diversity < threshold {
-                if !in_low_diversity_region {
-                    in_low_diversity_region = true;
-                    start_pos = i;
-                    sum_diversity = diversity;
-                    region_length = 1;
-                } else {
-                    sum_diversity += diversity;
-                    region_length += 1;
-                }
+    for (i, &diversity) in shannon_diversity.iter().enumerate() {
+        if diversity < threshold {
+            if !in_low_diversity_region {
+                in_low_diversity_region = true;
+                start_pos = i;
+                sum_diversity = diversity;
+                region_length = 1;
             } else {
-                if in_low_diversity_region {
-                    let end_pos = i;
-                    let mean_diversity = sum_diversity / region_length as f64;
-                    let repeat_length = end_pos - start_pos;
-                    // Write BED entry
-                    {
-                        let mut bed_writer = bed_writer.lock().unwrap();
-                        writeln!(
-                            bed_writer,
-                            "{}\t{}\t{}\tr={}:{};l={};s={:.2}",
-                            id,
-                            start_pos,
-                            end_pos,
-                            opt.start,
-                            opt.end,
-                            repeat_length,
-                            mean_diversity
-                        )?;
-                    }
-                    in_low_diversity_region = false;
+                sum_diversity += diversity;
+                region_length += 1;
+            }
+        } else {
+            if in_low_diversity_region {
+                let end_pos = i;
+                let mean_diversity = sum_diversity / region_length as f64;
+                let repeat_length = end_pos - start_pos;
+                // Write BED entry
+                {
+                    let mut bed_writer = bed_writer.lock().unwrap();
+                    writeln!(
+                        bed_writer,
+                        "{}\t{}\t{}\tr={}:{};l={};s={:.2}",
+                        id,
+                        start_pos,
+                        end_pos,
+                        opt.start,
+                        opt.end,
+                        repeat_length,
+                        mean_diversity
+                    )?;
                 }
+                in_low_diversity_region = false;
             }
         }
-        if in_low_diversity_region {
-            let end_pos = shannon_diversity.len();
-            let mean_diversity = sum_diversity / region_length as f64;
-            let repeat_length = end_pos - start_pos;
-            // Write BED entry
-            {
-                let mut bed_writer = bed_writer.lock().unwrap();
-                writeln!(
-                    bed_writer,
-                    "{}\t{}\t{}\tr={}:{};l={};s={:.2}",
-                    id,
-                    start_pos,
-                    end_pos,
-                    opt.start,
-                    opt.end,
-                    repeat_length,
-                    mean_diversity
-                )?;
-            }
+    }
+    if in_low_diversity_region {
+        let end_pos = shannon_diversity.len();
+        let mean_diversity = sum_diversity / region_length as f64;
+        let repeat_length = end_pos - start_pos;
+        // Write BED entry
+        {
+            let mut bed_writer = bed_writer.lock().unwrap();
+            writeln!(
+                bed_writer,
+                "{}\t{}\t{}\tr={}:{};l={};s={:.2}",
+                id,
+                start_pos,
+                end_pos,
+                opt.start,
+                opt.end,
+                repeat_length,
+                mean_diversity
+            )?;
         }
     }
 
