@@ -140,7 +140,7 @@ fn process_sequence_fasta(
     let mut conf_file = File::create(format!("{}.conf", id))?;
     conf_file.write_all(format!("{},{},{}", id, length, opt.number).as_bytes())?;
 
-    // Process Shannon diversity for BED output if filtering is enabled
+    // Process Shannon diversity for BED output
     let threshold = opt.threshold.clone();
     let mut in_low_diversity_region = false;
     let mut start_pos = 0;
