@@ -42,7 +42,7 @@ struct Opt {
     filter: bool,
 
     /// Threshold for filtering (required if --filter is set)
-    #[structopt(long = "threshold", required_if("filter", "true"), default_value="0.1")]
+    #[structopt(short, long = "threshold", required_if("filter", "true"), default_value="0.1")]
     threshold: f64,
 
     /// Extract sequences below threshold into FASTA (requires --filter)
