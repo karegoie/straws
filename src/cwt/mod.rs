@@ -200,7 +200,7 @@ impl Iterator for CwtIterator {
         let mut batch_cwt = cwt_perform(&f, &self.opt);
 
         self.current_batch += 1;
-        _standardize(&mut batch_cwt);
+        //_standardize(&mut batch_cwt);
         //_normalize(&mut batch_cwt);
         Some(batch_cwt) // Return period list
     }
