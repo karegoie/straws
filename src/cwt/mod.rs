@@ -59,7 +59,7 @@ fn wavelet_convolution(tup: (&Vec<Complex<f64>>, f64)) -> Array1<f64> {
 
     let fft_len = f_len + h.len();
 
-    debug!("Signal length: {}, Wavelet size: {}", f_len, (wavelet_size /OMEGA_0).round());
+    debug!("Signal length: {}, Wavelet size: {}", f_len, wavelet_size);
     let mut f_hat = Array1::zeros(fft_len);
     f_hat.slice_mut(s![..f_len]).assign(&f);
     let mut h_hat = Array1::zeros(fft_len);
