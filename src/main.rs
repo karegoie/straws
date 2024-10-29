@@ -179,7 +179,7 @@ fn process_sequence_fasta(
                     let mut bed_writer = bed_writer.lock().unwrap();
                     writeln!(
                         bed_writer,
-                        "{}\t{}\t{}\tr={}:{};l={};s={:.2}",
+                        "{}\t{}\t{}\tr={}:{};l={};s={:.4e}",
                         id,
                         start_pos,
                         end_pos,
@@ -202,7 +202,7 @@ fn process_sequence_fasta(
             let mut bed_writer = bed_writer.lock().unwrap();
             writeln!(
                 bed_writer,
-                "{}\t{}\t{}\tr={}:{};l={};s={:.2}",
+                "{}\t{}\t{}\tr={}:{};l={};s={:.4e}",
                 id,
                 start_pos,
                 end_pos,
