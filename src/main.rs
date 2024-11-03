@@ -159,7 +159,7 @@ fn process_sequence_fasta(
     let mut region_length = 0;
 
     for (i, &diversity) in shannon_diversity.iter().enumerate() {
-        if diversity < threshold {
+        if diversity > threshold {
             if !in_low_diversity_region {
                 in_low_diversity_region = true;
                 start_pos = i;
@@ -505,7 +505,7 @@ fn main() -> Result<(), std::io::Error> {
                 },
             };
             let mut fasta_file = BufWriter::new(File::create(format!("{}.fasta", &opt.output))?);
-            for result in results_locked.iter().filter(|r| r.diversity < threshold) {
+            for result in results_locked.iter().filter(|r| r.diversity > threshold) {
                 writeln!(fasta_file, ">{}", result.id)?;
                 writeln!(fasta_file, "{}", String::from_utf8_lossy(&result.sequence))?;
             }
