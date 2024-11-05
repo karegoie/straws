@@ -211,6 +211,7 @@ impl Iterator for CwtIterator {
 
         // _normalize(&mut batch_cwt); // Optional
         self.current_batch += 1;
+        println!("{:?}", batch_cwt);
         Some(batch_cwt) // Return period list
     }
 }
