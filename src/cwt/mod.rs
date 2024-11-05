@@ -1,5 +1,4 @@
 use std::f64::consts::PI;
-use std::sync::Arc;
 
 use rayon::prelude::*;
 use ndarray::{Array, Array1, Array2, Axis, s};
@@ -144,7 +143,6 @@ pub struct CwtIterator {
     opt: Params,
     current_batch: usize,
     batch_size: usize,
-    fft_planner: Arc<FftPlanner<f64>>,
 }
 
 impl CwtIterator {
@@ -170,14 +168,11 @@ impl CwtIterator {
             signal.len()
         };
 
-        let fft_planner = Arc::new(FftPlanner::new());
-
         CwtIterator {
             signal,
             opt: opt_clone,
             current_batch: 0,
             batch_size: fbatch_size,
-            fft_planner,
         }
     }
 
@@ -199,15 +194,9 @@ impl Iterator for CwtIterator {
         let end = std::cmp::min(start + self.batch_size, self.signal.len());
         let f = self.signal[start..end].to_vec();
 
-        let planner = match Arc::get_mut(&mut self.fft_planner) {
-            Some(planner) => planner,
-            None => {
-                debug!("FFTPlanner is shared and cannot be used safely");
-                return None;
-            }
-        };
+        let mut fft_planner = FftPlanner::new(); // 새로 FftPlanner 생성
 
-        let batch_cwt = cwt_perform(&f, &self.opt, planner);
+        let batch_cwt = cwt_perform(&f, &self.opt, &mut fft_planner);
 
         // _normalize(&mut batch_cwt); // Optional
         self.current_batch += 1;
