@@ -431,7 +431,7 @@ fn process_sequence_fastq(
 /// Entry point of the application.
 fn main() -> Result<(), std::io::Error> {
     // Initialize the logger
-    logger::init_logger(LevelFilter::Debug).expect("Failed to initialize logger");
+    logger::init_logger(LevelFilter::Info).expect("Failed to initialize logger");
 
     info!("Starting the STRAWS application.");
     let opt = Opt::from_args();
