@@ -71,6 +71,7 @@ fn process_fasta<P: AsRef<Path>>(
         if line.starts_with('>') {
             if !current_seq.is_empty() {
                 debug!("Processing sequence ID: {}", current_id);
+                debug!("Sequence length: {}", current_seq.len());
                 process_sequence_fasta(&current_seq, &current_id, params, opt, processed_seqnames, bed_writer)?;
                 current_seq.clear();
             }
