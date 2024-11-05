@@ -81,15 +81,16 @@ fn wavelet_convolution(f: &Vec<Complex<f64>>, scale: f64, fft_planner: &mut FftP
     result_view.slice(s![start..end]).to_owned()
 }
 
-fn cwt_perform(f: &Vec<Complex<f64>>, opt: &Params, fft_planner: &mut FftPlanner<f64>) -> Array2<f64> {
+fn cwt_perform(f: &Vec<Complex<f64>>, opt: &Params) -> Array2<f64> {
     let f_len = f.len();
     let periods = &opt.periods;
     let periods_len = periods.len();
 
     // Parallel computation of each period's wavelet convolution
-    let rows: Vec<Array1<f64>> = periods.iter().map(|&t| {
+    let rows: Vec<Array1<f64>> = periods.par_iter().map(|&t| {
         let scale = period_to_scale(t);
-        wavelet_convolution(f, scale, fft_planner)
+        let mut fft_planner = FftPlanner::new();
+        wavelet_convolution(f, scale, &mut fft_planner)
     }).collect();
 
     // Assemble the results into a 2D array
@@ -192,9 +193,7 @@ impl Iterator for CwtIterator {
         let end = std::cmp::min(start + self.batch_size, self.signal.len());
         let f = self.signal[start..end].to_vec();
 
-        let mut fft_planner = FftPlanner::new(); // 새로 FftPlanner 생성
-
-        let batch_cwt = cwt_perform(&f, &self.opt, &mut fft_planner);
+        let batch_cwt = cwt_perform(&f, &self.opt);
 
         // _normalize(&mut batch_cwt); // Optional
         self.current_batch += 1;
