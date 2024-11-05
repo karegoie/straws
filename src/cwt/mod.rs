@@ -47,8 +47,6 @@ fn wavelet_convolution(f: &Vec<Complex<f64>>, scale: f64, fft_planner: &mut FftP
     let h_len = h.len();
     let fft_len = f_len + h_len;
 
-    debug!("Signal length: {}, Wavelet size: {}", f_len, scale);
-    
     // Zero-padding
     let mut f_padded = vec![Complex::new(0.0, 0.0); fft_len];
     for (i, &val) in f.iter().enumerate() {
