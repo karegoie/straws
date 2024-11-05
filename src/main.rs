@@ -25,17 +25,9 @@ struct Opt {
     #[structopt(short, long)]
     input: String,
 
-    /// Start position (integer)
-    #[structopt(short, long, default_value = "100")]
-    start: usize,
-
-    /// End position (integer)  
-    #[structopt(short, long, default_value = "300")]
-    end: usize,
-
-    /// Number (integer)
-    #[structopt(short, long, default_value = "30")]  
-    number: usize,
+    /// Wavelet sizes (comma-separated list)
+    #[structopt(short = "w", long = "wavelet-sizes", required = true)]
+    wavelet_sizes: String,
 
     /// Enable filtering
     #[structopt(short, long)]  
@@ -138,7 +130,7 @@ fn process_sequence_fasta(
         debug!("Added sequence name to processed_seqnames.");
     }
     let mut conf_file = File::create(format!("{}.conf", id))?;
-    conf_file.write_all(format!("{},{},{}", id, length, opt.number).as_bytes())?;
+    conf_file.write_all(format!("{},{},{}", id, length, params.num).as_bytes())?;
 
     // Process Shannon diversity for BED output
     // Set threshold if it's not provided
@@ -175,16 +167,14 @@ fn process_sequence_fasta(
                 let mean_diversity = sum_diversity / region_length as f64;
                 let repeat_length = end_pos - start_pos;
                 // Write BED entry
-                if repeat_length as f64 > opt.start  as f64 * 1.5 {
+                if repeat_length as f64 > params.periods.iter().cloned().fold(0./0., f64::max) * 1.5 {
                     let mut bed_writer = bed_writer.lock().unwrap();
                     writeln!(
                         bed_writer,
-                        "{}\t{}\t{}\tr={}:{};l={};s={:.4e}",
+                        "{}\t{}\t{}\tl={};s={:.4e}",
                         id,
                         start_pos,
                         end_pos,
-                        opt.start,
-                        opt.end,
                         repeat_length,
                         mean_diversity
                     )?;
@@ -198,16 +188,14 @@ fn process_sequence_fasta(
         let mean_diversity = sum_diversity / region_length as f64;
         let repeat_length = end_pos - start_pos;
         // Write BED entry
-        if repeat_length as f64 > opt.start  as f64 * 1.5 {
+        if repeat_length as f64 > params.periods.iter().cloned().fold(0./0., f64::max) * 1.5 {
             let mut bed_writer = bed_writer.lock().unwrap();
             writeln!(
                 bed_writer,
-                "{}\t{}\t{}\tr={}:{};l={};s={:.4e}",
+                "{}\t{}\t{}\tl={};s={:.4e}",
                 id,
                 start_pos,
                 end_pos,
-                opt.start,
-                opt.end,
                 repeat_length,
                 mean_diversity
             )?;
@@ -448,14 +436,16 @@ fn main() -> Result<(), std::io::Error> {
     let opt = Opt::from_args();
     debug!("Parsed command-line arguments: {:?}", opt);
 
-    let start = opt.start as f64;
-    let end = opt.end as f64;  
-    let num = opt.number; 
-    let periods = cwt::linspace(start, end, num).to_vec();
+    let periods: Vec<f64> = opt.wavelet_sizes
+        .split(',')
+        .map(|s| s.trim().parse::<f64>().expect("Invalid wavelet size"))
+        .collect();
+
+    let num = periods.len();
 
     let params = cwt::Params {
-        num,  
-        periods, 
+        num,
+        periods,
     };
     debug!("CWT parameters set: {:?}", params);
 

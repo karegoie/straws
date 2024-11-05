@@ -27,19 +27,10 @@ fn pairwise_multiply(a: &[f64], b: &[Complex<f64>]) -> Vec<Complex<f64>> {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).collect()
 }
 
-// linspace function
-pub fn linspace(start: f64, stop: f64, num: usize) -> Array1<f64> {
-    if num == 1 {
-        return Array::from_elem(1, start);
-    }
-    let delta = (stop - start) / ((num - 1) as f64);
-    Array::from_shape_fn(num, |i| start + (i as f64) * delta) // Correct linspace implementation
-}
-
 // Morlet wavelet function
 fn psi(s: f64) -> Array1<Complex<f64>> {
-    //let wl = (OMEGA_0 * s).round() as usize; // Adjust t range based on scale
-    let t = linspace(-OMEGA_0 * s, OMEGA_0 * s, 2*OMEGA_0 as usize * s as usize); // Adjust t range based on scale
+    let t_len = (2.0 * OMEGA_0 * s) as usize;
+    let t = Array::linspace(-OMEGA_0 * s, OMEGA_0 * s, t_len);
 
     let coeff = (PI.powf(-0.25)) / s.sqrt();
     let exp_term = t.mapv(|x| (-0.5 * (x / s).powi(2)).exp());
