@@ -437,10 +437,14 @@ fn main() -> Result<(), std::io::Error> {
                 let bounds: Vec<&str> = trimmed.split('-').collect();
                 if bounds.len() == 2 {
                     if let (Ok(start), Ok(end)) = (bounds[0].parse::<f64>(), bounds[1].parse::<f64>()) {
-                        return Some(iter::successors(Some(start), |&x| {
-                            let next = x + 1.0;
-                            if next <= end { Some(next) } else { None }
-                        }).collect::<Vec<f64>>());
+                        let step = (end - start) / 4.0;
+                        return Some(vec![
+                            start,
+                            start + step,
+                            start + 2.0 * step,
+                            start + 3.0 * step,
+                            end,
+                        ]);
                     }
                 }
                 None
