@@ -194,12 +194,13 @@ fn process_sequence_fasta(
             let mut bed_writer = bed_writer.lock().unwrap();
             writeln!(
                 bed_writer,
-                "{}\t{}\t{}\tl={};s={:.4e}",
+                "{}\t{}\t{}\tl={};s={:.4e};w={}",
                 id,
                 start_pos,
                 end_pos,
                 repeat_length,
-                mean_diversity
+                mean_diversity,
+                params.periods.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",")
             )?;
         }
     }
