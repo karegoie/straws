@@ -513,7 +513,7 @@ fn main() -> Result<(), std::io::Error> {
                 writeln!(fasta_file, ">{}", result.id)?;
                 writeln!(fasta_file, "{}", String::from_utf8_lossy(&result.sequence))?;
             }
-            info!("Extracted sequences below threshold {} to filtered.fasta.", threshold);
+            info!("Extracted sequences below threshold {} to file.", threshold);
         }
     } else {
         error!("Unsupported file format or incorrect filtering options.");
