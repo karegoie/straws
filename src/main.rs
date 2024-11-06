@@ -16,6 +16,7 @@ use tempfile::NamedTempFile;
 use memmap2::MmapOptions;
 use byteorder::{WriteBytesExt, LittleEndian};
 use log::{info, warn, error, debug, LevelFilter};
+use std::iter;
 
 /// Command-line options structure.
 #[derive(Debug, StructOpt)]
@@ -108,7 +109,7 @@ fn process_sequence_fasta(
     debug!("Initializing CWT iterator for sequence ID: {}", id);
     let cwt_iterator = cwt::CwtIterator::new(&mut seq_copy, params);
 
-    let mut shannon_diversity = Vec::new();
+    let mut mean_values = Vec::new();
     let cwt_file = File::create(format!("{}.cwt", id))?;
     let mut writer = BufWriter::with_capacity(1024 * 1024 * 1024, cwt_file);
     let mut length = 0;
@@ -118,9 +119,9 @@ fn process_sequence_fasta(
             for val in row.iter() {
                 writer.write_f64::<LittleEndian>(*val)?;
             }
-            let diversity = seq::calculate_shannon_diversity_for_vector(&row.to_vec());
-            shannon_diversity.push(diversity);
-            debug!("Calculated Shannon diversity: {}", diversity);
+            let mean = row.mean().unwrap_or(0.0);
+            mean_values.push(mean);
+            debug!("Calculated mean value: {}", mean);
             length += 1;
         }
     }
@@ -133,74 +134,65 @@ fn process_sequence_fasta(
     let mut conf_file = File::create(format!("{}.conf", id))?;
     conf_file.write_all(format!("{},{},{}", id, length, params.num).as_bytes())?;
 
-    // Process Shannon diversity for BED output
-    // Set threshold if it's not provided
+    // Process mean values for BED output
     let threshold = match opt.threshold {
         Some(t) => t,
         None => {
-            let mut sorted_diversity = shannon_diversity.clone();
-            sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let index = (sorted_diversity.len() as f64 * 0.01).ceil() as usize;
-            let threshold = sorted_diversity[index.min(sorted_diversity.len() - 1)];
+            let mut sorted_means = mean_values.clone();
+            sorted_means.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let index = (sorted_means.len() as f64 * 0.01).ceil() as usize;
+            let threshold = sorted_means[index.min(sorted_means.len() - 1)];
             info!("Calculated threshold: {}", threshold);
             threshold
         },
     };
-    let mut in_low_diversity_region = false;
+    let mut in_low_region = false;
     let mut start_pos = 0;
-    let mut sum_diversity = 0.0;
+    let mut sum_mean = 0.0;
     let mut region_length = 0;
 
-    for (i, &diversity) in shannon_diversity.iter().enumerate() {
-        if diversity > threshold {
-            if !in_low_diversity_region {
-                in_low_diversity_region = true;
+    for (i, &mean) in mean_values.iter().enumerate() {
+        if mean > threshold {
+            if !in_low_region {
+                in_low_region = true;
                 start_pos = i;
-                sum_diversity = diversity;
+                sum_mean = mean;
                 region_length = 1;
             } else {
-                sum_diversity += diversity;
+                sum_mean += mean;
                 region_length += 1;
             }
         } else {
-            if in_low_diversity_region {
+            if in_low_region {
                 let end_pos = i;
-                let mean_diversity = sum_diversity / region_length as f64;
+                let mean_region = sum_mean / region_length as f64;
                 let repeat_length = end_pos - start_pos;
-                // Write BED entry
-                if repeat_length as f64 > params.periods.iter().cloned().fold(0./0., f64::max) * 1.5 {
-                    let mut bed_writer = bed_writer.lock().unwrap();
-                    writeln!(
-                        bed_writer,
-                        "{}\t{}\t{}\tl={};s={:.4e}",
-                        id,
-                        start_pos,
-                        end_pos,
-                        repeat_length,
-                        mean_diversity
-                    )?;
-                }
-                in_low_diversity_region = false;
+                writeln!(
+                    bed_writer.lock().unwrap(),
+                    "{}\t{}\t{}\t{}\t+\t{}",
+                    id,
+                    start_pos,
+                    end_pos,
+                    repeat_length,
+                    mean_region
+                )?;
+                in_low_region = false;
             }
         }
     }
-    if in_low_diversity_region {
-        let end_pos = shannon_diversity.len();
-        let mean_diversity = sum_diversity / region_length as f64;
+    if in_low_region {
+        let end_pos = mean_values.len();
+        let mean_region = sum_mean / region_length as f64;
         let repeat_length = end_pos - start_pos;
-        // Write BED entry
-        if repeat_length as f64 > params.periods.iter().cloned().fold(0./0., f64::max) * 1.5 {
-            let mut bed_writer = bed_writer.lock().unwrap();
-            writeln!(
-                bed_writer,
-                "{}\t{}\t{}\tl={};s={:.4e}",
-                id,
-                start_pos,
-                end_pos,
-                repeat_length,
-                mean_diversity
-            )?;
-        }
+        writeln!(
+            bed_writer.lock().unwrap(),
+            "{}\t{}\t{}\t{}\t+\t{}",
+            id,
+            start_pos,
+            end_pos,
+            repeat_length,
+            mean_region
+        )?;
     }
 
     info!("Processed sequence ID: {}", id);
@@ -401,7 +393,7 @@ fn process_sequence_fastq(
     let mut shannon_diversity = Vec::new();
 
     for batch in cwt_iterator.iter() {
-        for row in batch.axis_iter(Axis(1)) {
+        for row in batch.axis_iter(Axis(0)) {
             let diversity = seq::calculate_shannon_diversity_for_vector(&row.to_vec());
             shannon_diversity.push(diversity);
             debug!("Calculated Shannon diversity: {}", diversity);
@@ -439,7 +431,24 @@ fn main() -> Result<(), std::io::Error> {
 
     let periods: Vec<f64> = opt.wavelet_sizes
         .split(',')
-        .map(|s| s.trim().parse::<f64>().expect("Invalid wavelet size"))
+        .flat_map(|s| {
+            let trimmed = s.trim();
+            if trimmed.contains('-') {
+                let bounds: Vec<&str> = trimmed.split('-').collect();
+                if bounds.len() == 2 {
+                    if let (Ok(start), Ok(end)) = (bounds[0].parse::<f64>(), bounds[1].parse::<f64>()) {
+                        return Some(iter::successors(Some(start), |&x| {
+                            let next = x + 1.0;
+                            if next <= end { Some(next) } else { None }
+                        }).collect::<Vec<f64>>());
+                    }
+                }
+                None
+            } else {
+                trimmed.parse::<f64>().ok().map(|num| vec![num])
+            }
+        })
+        .flatten()
         .collect();
 
     let num = periods.len();
