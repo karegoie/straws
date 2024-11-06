@@ -168,11 +168,13 @@ fn process_sequence_fasta(
                 let repeat_length = end_pos - start_pos;
                 writeln!(
                     bed_writer.lock().unwrap(),
-                    "{}\t{}\t{}\t{}\t+\t{}",
+                    "{}\t{}\t{}\tl={}\t+\t{}",
                     id,
                     start_pos,
                     end_pos,
                     repeat_length,
+                    // what wavelet size was used
+
                     mean_region
                 )?;
                 in_low_region = false;
@@ -185,7 +187,7 @@ fn process_sequence_fasta(
         let repeat_length = end_pos - start_pos;
         writeln!(
             bed_writer.lock().unwrap(),
-            "{}\t{}\t{}\t{}\t+\t{}",
+            "{}\t{}\t{}\tl={}\t+\t{}",
             id,
             start_pos,
             end_pos,
