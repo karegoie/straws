@@ -16,7 +16,6 @@ use tempfile::NamedTempFile;
 use memmap2::MmapOptions;
 use byteorder::{WriteBytesExt, LittleEndian};
 use log::{info, warn, error, debug, LevelFilter};
-use std::iter;
 
 /// Command-line options structure.
 #[derive(Debug, StructOpt)]
