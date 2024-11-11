@@ -17,7 +17,7 @@ def setup_logging():
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description='Process CWT data and generate a heatmap.'
+        description='Generate a heatmap from CWT file'
     )
     parser.add_argument(
         'filename',

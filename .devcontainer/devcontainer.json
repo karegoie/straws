@@ -12,6 +12,7 @@
 			},
 			"extensions": [
 				"rust-lang.rust-analyzer",
+				"ms-python.python",
 				"vadimcn.vscode-lldb",
 				"github.copilot",
 				"github.copilot-chat"

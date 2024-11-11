@@ -1,3 +1,9 @@
 target/
 Cargo.lock
 .github/
+*.cwt
+*.conf
+*.bed
+*.png
+*.fasta
+*.fa
