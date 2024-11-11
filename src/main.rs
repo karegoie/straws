@@ -25,17 +25,9 @@ struct Opt {
     #[structopt(short, long)]
     input: String,
 
-    /// Start position (integer)
-    #[structopt(short, long, default_value = "100")]
-    start: usize,
-
-    /// End position (integer)  
-    #[structopt(short, long, default_value = "300")]
-    end: usize,
-
-    /// Number (integer)
-    #[structopt(short, long, default_value = "30")]  
-    number: usize,
+    /// Wavelet sizes (comma-separated list)
+    #[structopt(short = "w", long = "wavelet-sizes", required = true)]
+    wavelet_sizes: String,
 
     /// Enable filtering
     #[structopt(short, long)]  
@@ -79,6 +71,7 @@ fn process_fasta<P: AsRef<Path>>(
         if line.starts_with('>') {
             if !current_seq.is_empty() {
                 debug!("Processing sequence ID: {}", current_id);
+                debug!("Sequence length: {}", current_seq.len());
                 process_sequence_fasta(&current_seq, &current_id, params, opt, processed_seqnames, bed_writer)?;
                 current_seq.clear();
             }
@@ -138,7 +131,7 @@ fn process_sequence_fasta(
         debug!("Added sequence name to processed_seqnames.");
     }
     let mut conf_file = File::create(format!("{}.conf", id))?;
-    conf_file.write_all(format!("{},{},{}", id, length, opt.number).as_bytes())?;
+    conf_file.write_all(format!("{},{},{}", id, length, params.num).as_bytes())?;
 
     // Process Shannon diversity for BED output
     // Set threshold if it's not provided
@@ -159,7 +152,7 @@ fn process_sequence_fasta(
     let mut region_length = 0;
 
     for (i, &diversity) in shannon_diversity.iter().enumerate() {
-        if diversity > threshold {
+        if diversity < threshold {
             if !in_low_diversity_region {
                 in_low_diversity_region = true;
                 start_pos = i;
@@ -175,18 +168,17 @@ fn process_sequence_fasta(
                 let mean_diversity = sum_diversity / region_length as f64;
                 let repeat_length = end_pos - start_pos;
                 // Write BED entry
-                if repeat_length as f64 > opt.start  as f64 * 1.5 {
+                if repeat_length as f64 > params.periods.iter().cloned().fold(0./0., f64::max) * 1.5 {
                     let mut bed_writer = bed_writer.lock().unwrap();
                     writeln!(
                         bed_writer,
-                        "{}\t{}\t{}\tr={}:{};l={};s={:.4e}",
+                        "{}\t{}\t{}\tl={};s={:.4e};w={}",
                         id,
                         start_pos,
                         end_pos,
-                        opt.start,
-                        opt.end,
                         repeat_length,
-                        mean_diversity
+                        mean_diversity,
+                        params.periods.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",")
                     )?;
                 }
                 in_low_diversity_region = false;
@@ -198,18 +190,17 @@ fn process_sequence_fasta(
         let mean_diversity = sum_diversity / region_length as f64;
         let repeat_length = end_pos - start_pos;
         // Write BED entry
-        if repeat_length as f64 > opt.start  as f64 * 1.5 {
+        if repeat_length as f64 > params.periods.iter().cloned().fold(0./0., f64::max) * 1.5 {
             let mut bed_writer = bed_writer.lock().unwrap();
             writeln!(
                 bed_writer,
-                "{}\t{}\t{}\tr={}:{};l={};s={:.4e}",
+                "{}\t{}\t{}\tl={};s={:.4e};w={}",
                 id,
                 start_pos,
                 end_pos,
-                opt.start,
-                opt.end,
                 repeat_length,
-                mean_diversity
+                mean_diversity,
+                params.periods.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",")
             )?;
         }
     }
@@ -412,7 +403,7 @@ fn process_sequence_fastq(
     let mut shannon_diversity = Vec::new();
 
     for batch in cwt_iterator.iter() {
-        for row in batch.axis_iter(Axis(1)) {
+        for row in batch.axis_iter(Axis(0)) {
             let diversity = seq::calculate_shannon_diversity_for_vector(&row.to_vec());
             shannon_diversity.push(diversity);
             debug!("Calculated Shannon diversity: {}", diversity);
@@ -448,14 +439,27 @@ fn main() -> Result<(), std::io::Error> {
     let opt = Opt::from_args();
     debug!("Parsed command-line arguments: {:?}", opt);
 
-    let start = opt.start as f64;
-    let end = opt.end as f64;  
-    let num = opt.number; 
-    let periods = cwt::linspace(start, end, num).to_vec();
+    let periods: Vec<f64> = if opt.wavelet_sizes.contains('-') {
+        let parts: Vec<&str> = opt.wavelet_sizes.split('-').collect();
+        if parts.len() != 2 {
+            panic!("Invalid wavelet size range. Expected format start-end");
+        }
+        let start: f64 = parts[0].trim().parse().expect("Invalid start of wavelet size range");
+        let end: f64 = parts[1].trim().parse().expect("Invalid end of wavelet size range");
+        let num = 5;
+        (0..num).map(|i| start + (end - start) * i as f64 / (num - 1) as f64).collect()
+    } else {
+        opt.wavelet_sizes
+            .split(',')
+            .map(|s| s.trim().parse::<f64>().expect("Invalid wavelet size"))
+            .collect()
+    };
+
+    let num = periods.len();
 
     let params = cwt::Params {
-        num,  
-        periods, 
+        num,
+        periods,
     };
     debug!("CWT parameters set: {:?}", params);
 
@@ -505,11 +509,11 @@ fn main() -> Result<(), std::io::Error> {
                 },
             };
             let mut fasta_file = BufWriter::new(File::create(format!("{}.fasta", &opt.output))?);
-            for result in results_locked.iter().filter(|r| r.diversity > threshold) {
+            for result in results_locked.iter().filter(|r| r.diversity < threshold) {
                 writeln!(fasta_file, ">{}", result.id)?;
                 writeln!(fasta_file, "{}", String::from_utf8_lossy(&result.sequence))?;
             }
-            info!("Extracted sequences below threshold {} to filtered.fasta.", threshold);
+            info!("Extracted sequences below threshold {} to file.", threshold);
         }
     } else {
         error!("Unsupported file format or incorrect filtering options.");
