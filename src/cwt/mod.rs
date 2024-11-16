@@ -1,7 +1,7 @@
 use std::f64::consts::PI;
 
 use rayon::prelude::*;
-use ndarray::{Array, Array1, Array2, Axis, s};
+use ndarray::{Array, Array1, Array2, Axis};
 use rustfft::{FftPlanner, num_complex::Complex};
 use sys_info::mem_info;
 use log::debug;
