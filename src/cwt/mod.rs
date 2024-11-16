@@ -40,57 +40,82 @@ fn psi(s: f64) -> Array1<Complex<f64>> {
     psi
 }
 
-// Wavelet convolution using FFT
-fn wavelet_convolution(f: &Vec<Complex<f64>>, scale: f64, fft_planner: &mut FftPlanner<f64>) -> Array1<f64> {
+// Add new struct for reusable buffers
+#[derive(Clone)]
+struct WaveletBuffers {
+    f_padded: Vec<Complex<f64>>,
+    h_padded: Vec<Complex<f64>>,
+    result_complex: Vec<Complex<f64>>,
+}
+
+impl WaveletBuffers {
+    fn new(fft_len: usize) -> Self {
+        WaveletBuffers {
+            f_padded: vec![Complex::new(0.0, 0.0); fft_len],
+            h_padded: vec![Complex::new(0.0, 0.0); fft_len],
+            result_complex: vec![Complex::new(0.0, 0.0); fft_len],
+        }
+    }
+
+    fn reset(&mut self) {
+        self.f_padded.fill(Complex::new(0.0, 0.0));
+        self.h_padded.fill(Complex::new(0.0, 0.0));
+        self.result_complex.fill(Complex::new(0.0, 0.0));
+    }
+}
+
+// Optimized wavelet convolution function
+fn wavelet_convolution(
+    f: &[Complex<f64>], 
+    scale: f64, 
+    fft_planner: &mut FftPlanner<f64>,
+    buffers: &mut WaveletBuffers
+) -> Array1<f64> {
     let h = psi(scale);
     let f_len = f.len();
     let h_len = h.len();
-    let fft_len = f_len + h_len;
+    
+    buffers.reset();
+    
+    // Copy input data to padded buffers
+    buffers.f_padded[..f_len].copy_from_slice(f);
+    buffers.h_padded[..h_len].copy_from_slice(h.as_slice().unwrap());
 
-    // Zero-padding
-    let mut f_padded = vec![Complex::new(0.0, 0.0); fft_len];
-    for (i, &val) in f.iter().enumerate() {
-        f_padded[i] = val;
+    // Reuse FFT plans
+    let fft = fft_planner.plan_fft_forward(buffers.f_padded.len());
+    fft.process(&mut buffers.f_padded);
+    fft.process(&mut buffers.h_padded);
+
+    // In-place multiplication
+    for i in 0..buffers.f_padded.len() {
+        buffers.result_complex[i] = buffers.f_padded[i] * buffers.h_padded[i];
     }
 
-    let mut h_padded = vec![Complex::new(0.0, 0.0); fft_len];
-    for (i, &val) in h.iter().enumerate() {
-        h_padded[i] = val;
-    }
+    // In-place IFFT
+    let ifft = fft_planner.plan_fft_inverse(buffers.result_complex.len());
+    ifft.process(&mut buffers.result_complex);
 
-    // Perform FFT
-    let fft = fft_planner.plan_fft_forward(fft_len);
-    fft.process(&mut f_padded);
-    fft.process(&mut h_padded);
-
-    // Point-wise multiplication
-    let mut result_complex: Vec<Complex<f64>> = f_padded.iter()
-        .zip(h_padded.iter())
-        .map(|(&a, &b)| a * b)
-        .collect();
-
-    // Perform IFFT
-    let ifft = fft_planner.plan_fft_inverse(fft_len);
-    ifft.process(&mut result_complex);
-
-    // Normalize and extract the relevant part
-    let result_norm: Vec<f64> = result_complex.iter().map(|&val| val.norm()).collect();
-    let result_view = Array1::from_shape_vec(fft_len, result_norm).unwrap();
+    // Extract relevant part and convert to real values
     let start = h_len / 2;
     let end = start + f_len;
-    result_view.slice(s![start..end]).to_owned()
+    Array1::from_iter(buffers.result_complex[start..end].iter().map(|&x| x.norm()))
 }
 
-fn cwt_perform(f: &Vec<Complex<f64>>, opt: &Params) -> Array2<f64> {
+// Modify cwt_perform to use the new buffers
+fn cwt_perform(f: &[Complex<f64>], opt: &Params) -> Array2<f64> {
     let f_len = f.len();
     let periods = &opt.periods;
     let periods_len = periods.len();
+    
+    let fft_len = f_len + psi(period_to_scale(periods[0])).len();
+    let buffers = WaveletBuffers::new(fft_len);
 
     // Parallel computation of each period's wavelet convolution
     let rows: Vec<Array1<f64>> = periods.par_iter().map(|&t| {
         let scale = period_to_scale(t);
         let mut fft_planner = FftPlanner::new();
-        wavelet_convolution(f, scale, &mut fft_planner)
+        let mut local_buffers = buffers.clone();
+        wavelet_convolution(f, scale, &mut fft_planner, &mut local_buffers)
     }).collect();
 
     // Assemble the results into a 2D array

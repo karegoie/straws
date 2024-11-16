@@ -23,12 +23,26 @@ impl Convert for Converter {
 }
 
 pub fn convert_to_signal(sequence: &Vec<u8>) -> Vec<Complex<f64>> {
-    let converter = Converter;
-    let mut signal = Vec::with_capacity(sequence.len());
+    static CONVERTER: Converter = Converter;
+    let chunk_size = 1024;
+    use std::sync::Mutex;
 
-    sequence.par_iter()
-        .map(|&x| converter.convert(x))
-        .collect_into_vec(&mut signal);
+    let signal = Mutex::new(vec![Complex::new(0.0, 0.0); sequence.len()]);
+    
+    sequence.chunks(chunk_size)
+        .enumerate()
+        .par_bridge()
+        .for_each(|(i, chunk)| {
+            let start = i * chunk_size;
+            chunk.iter()
+                .enumerate()
+                .for_each(|(j, &x)| {
+                    let mut signal = signal.lock().unwrap();
+                    signal[start + j] = CONVERTER.convert(x);
+                });
+        });
+
+    let signal = Mutex::into_inner(signal).unwrap();
 
     signal
 }
