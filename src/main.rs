@@ -155,7 +155,7 @@ fn process_sequence_fasta(
         None => {
             let mut sorted_diversity = shannon_diversity.clone();
             sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let index = (sorted_diversity.len() as f64 * 0.01).ceil() as usize;
+            let index = (sorted_diversity.len() as f64 * 0.05).ceil() as usize;
             let threshold = sorted_diversity[index.min(sorted_diversity.len() - 1)];
             info!("Calculated threshold: {}", threshold);
             threshold
@@ -517,7 +517,7 @@ fn main() -> Result<(), std::io::Error> {
                 None => {
                     let mut sorted_diversity = results_locked.iter().map(|d| d.diversity).collect::<Vec<_>>();
                     sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                    let index = (sorted_diversity.len() as f64 * 0.01).ceil() as usize;
+                    let index = (sorted_diversity.len() as f64 * 0.05).ceil() as usize;
                     let threshold = sorted_diversity[index.min(sorted_diversity.len() - 1)];
                     info!("Calculated threshold: {}", threshold);
                     threshold
