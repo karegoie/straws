@@ -461,7 +461,7 @@ fn main() -> Result<(), std::io::Error> {
         }
         let start: f64 = parts[0].trim().parse().expect("Invalid start of wavelet size range");
         let end: f64 = parts[1].trim().parse().expect("Invalid end of wavelet size range");
-        let num = 16;
+        let num = 8;
         (0..num).map(|i| start + (end - start) * i as f64 / (num - 1) as f64).collect()
     } else {
         opt.wavelet_sizes
