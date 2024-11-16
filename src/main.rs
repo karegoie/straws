@@ -33,6 +33,10 @@ struct Opt {
     #[structopt(short, long)]  
     filter: bool,
 
+    /// No .cwt file for visualize
+    #[structopt(short)]
+    cwt: bool,
+
     /// Threshold for filtering (required if --filter is set)
     #[structopt(short, long = "threshold", required_if("filter", "true"))]
     threshold: Option<f64>,
@@ -113,18 +117,29 @@ fn process_sequence_fasta(
     let mut writer = BufWriter::with_capacity(1024 * 1024 * 1024, cwt_file);
     let mut length = 0;
 
-    for batch in cwt_iterator.iter() {
-        for row in batch.axis_iter(Axis(0)) {
-            for val in row.iter() {
-                writer.write_f64::<LittleEndian>(*val)?;
+    if opt.cwt {
+        for batch in cwt_iterator.iter() {
+            for row in batch.axis_iter(Axis(0)) {
+                for val in row.iter() {
+                    writer.write_f64::<LittleEndian>(*val)?;
+                }
+                let diversity = seq::calculate_shannon_diversity_for_vector(&row.to_vec());
+                shannon_diversity.push(diversity);
+                debug!("Calculated Shannon diversity: {}", diversity);
+                length += 1;
             }
-            let diversity = seq::calculate_shannon_diversity_for_vector(&row.to_vec());
-            shannon_diversity.push(diversity);
-            debug!("Calculated Shannon diversity: {}", diversity);
-            length += 1;
+        }
+    } else {
+        for batch in cwt_iterator.iter() {
+            for row in batch.axis_iter(Axis(0)) {
+                let diversity = seq::calculate_shannon_diversity_for_vector(&row.to_vec());
+                shannon_diversity.push(diversity);
+                debug!("Calculated Shannon diversity: {}", diversity);
+                length += 1;
+            }
         }
     }
-
+    
     {
         let mut seqnames = processed_seqnames.lock().unwrap();
         seqnames.push(seqname);
@@ -446,7 +461,7 @@ fn main() -> Result<(), std::io::Error> {
         }
         let start: f64 = parts[0].trim().parse().expect("Invalid start of wavelet size range");
         let end: f64 = parts[1].trim().parse().expect("Invalid end of wavelet size range");
-        let num = 5;
+        let num = 16;
         (0..num).map(|i| start + (end - start) * i as f64 / (num - 1) as f64).collect()
     } else {
         opt.wavelet_sizes
