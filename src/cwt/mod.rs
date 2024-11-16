@@ -176,7 +176,12 @@ impl CwtIterator {
     }
 
     pub fn iter(&self) -> CwtIterator {
-        self.clone()
+        CwtIterator {
+            signal: self.signal.clone(),
+            opt: self.opt.clone(),
+            current_batch: 0,
+            batch_size: self.batch_size,
+        }
     }
 }
 

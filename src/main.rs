@@ -112,12 +112,13 @@ fn process_sequence_fasta(
     debug!("Initializing CWT iterator for sequence ID: {}", id);
     let cwt_iterator = cwt::CwtIterator::new(&mut seq_copy, params);
 
-    let mut shannon_diversity = Vec::new();
-    let cwt_file = File::create(format!("{}.cwt", id))?;
-    let mut writer = BufWriter::with_capacity(1024 * 1024 * 1024, cwt_file);
+    let mut shannon_diversity = Vec::new();    
     let mut length = 0;
 
     if opt.cwt {
+        let cwt_file = File::create(format!("{}.cwt", id))?;
+        let mut writer = BufWriter::with_capacity(1024 * 1024 * 1024, cwt_file);
+
         for batch in cwt_iterator.iter() {
             for row in batch.axis_iter(Axis(0)) {
                 for val in row.iter() {
