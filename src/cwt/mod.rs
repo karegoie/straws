@@ -8,7 +8,7 @@ use log::debug;
 use std::iter::Iterator;
 
 // Define constants
-const OMEGA_0: f64 = 6.0;
+pub const OMEGA_0: f64 = 6.0;
 
 // Params struct with periods
 #[derive(Clone, Debug)]
@@ -199,8 +199,8 @@ impl Iterator for CwtIterator {
         let f = self.signal[start..end].to_vec();
 
         let batch_cwt = cwt_perform(&f, &self.opt);
-
-        // _normalize(&mut batch_cwt); // Optional
+        debug!("{:?}", batch_cwt);
+        //_standardize(&mut batch_cwt); // Optional
         self.current_batch += 1;
         debug!("{:?}", batch_cwt);
         Some(batch_cwt) // Return period list

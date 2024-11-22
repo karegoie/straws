@@ -113,7 +113,7 @@ fn process_sequence_fasta(
     let cwt_iterator = cwt::CwtIterator::new(&mut seq_copy, params);
 
     let mut shannon_diversity = Vec::new();    
-    let mut length = 0;
+    let mut _length = 0;
 
     if opt.cwt {
         let cwt_file = File::create(format!("{}.cwt", id))?;
@@ -127,7 +127,7 @@ fn process_sequence_fasta(
                 let diversity = seq::calculate_shannon_diversity_for_vector(&row.to_vec());
                 shannon_diversity.push(diversity);
                 debug!("Calculated Shannon diversity: {}", diversity);
-                length += 1;
+                _length += 1;
             }
         }
     } else {
@@ -136,7 +136,7 @@ fn process_sequence_fasta(
                 let diversity = seq::calculate_shannon_diversity_for_vector(&row.to_vec());
                 shannon_diversity.push(diversity);
                 debug!("Calculated Shannon diversity: {}", diversity);
-                length += 1;
+                _length += 1;
             }
         }
     }
@@ -146,8 +146,8 @@ fn process_sequence_fasta(
         seqnames.push(seqname);
         debug!("Added sequence name to processed_seqnames.");
     }
-    let mut conf_file = File::create(format!("{}.conf", id))?;
-    conf_file.write_all(format!("{},{},{}", id, length, params.num).as_bytes())?;
+    //let mut conf_file = File::create(format!("{}.conf", id))?;
+    //conf_file.write_all(format!("{},{},{}", id, length, params.num).as_bytes())?;
 
     // Process Shannon diversity for BED output
     // Set threshold if it's not provided
@@ -156,7 +156,7 @@ fn process_sequence_fasta(
         None => {
             let mut sorted_diversity = shannon_diversity.clone();
             sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let index = (sorted_diversity.len() as f64 * 0.05).ceil() as usize;
+            let index = (sorted_diversity.len() as f64 * 0.1).ceil() as usize;
             let threshold = sorted_diversity[index.min(sorted_diversity.len() - 1)];
             info!("Calculated threshold: {}", threshold);
             threshold
@@ -166,7 +166,6 @@ fn process_sequence_fasta(
     let mut start_pos = 0;
     let mut sum_diversity = 0.0;
     let mut region_length = 0;
-
     for (i, &diversity) in shannon_diversity.iter().enumerate() {
         if diversity < threshold {
             if !in_low_diversity_region {
@@ -182,41 +181,39 @@ fn process_sequence_fasta(
             if in_low_diversity_region {
                 let end_pos = i;
                 let mean_diversity = sum_diversity / region_length as f64;
-                let repeat_length = end_pos - start_pos;
+                let repeat_length = (end_pos as isize - start_pos as isize).abs();
                 // Write BED entry
-                if repeat_length as f64 > params.periods.iter().cloned().fold(0./0., f64::max) * 1.5 {
+                if repeat_length as f64 >= cwt::OMEGA_0 {
                     let mut bed_writer = bed_writer.lock().unwrap();
                     writeln!(
                         bed_writer,
-                        "{}\t{}\t{}\tl={};s={:.4e};w={}",
+                        "{}\t{}\t{}\tl={};s={:.4e}",
                         id,
                         start_pos,
                         end_pos,
                         repeat_length,
                         mean_diversity,
-                        params.periods.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",")
                     )?;
+                    in_low_diversity_region = false;
                 }
-                in_low_diversity_region = false;
             }
         }
     }
     if in_low_diversity_region {
         let end_pos = shannon_diversity.len();
         let mean_diversity = sum_diversity / region_length as f64;
-        let repeat_length = end_pos - start_pos;
+        let repeat_length = (end_pos as isize - start_pos as isize).abs();
         // Write BED entry
-        if repeat_length as f64 > params.periods.iter().cloned().fold(0./0., f64::max) * 1.5 {
+        if repeat_length as f64 >= cwt::OMEGA_0 {
             let mut bed_writer = bed_writer.lock().unwrap();
             writeln!(
                 bed_writer,
-                "{}\t{}\t{}\tl={};s={:.4e};w={}",
+                "{}\t{}\t{}\tl={};s={:.4e}",
                 id,
                 start_pos,
                 end_pos,
                 repeat_length,
                 mean_diversity,
-                params.periods.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",")
             )?;
         }
     }
@@ -462,7 +459,12 @@ fn main() -> Result<(), std::io::Error> {
         }
         let start: f64 = parts[0].trim().parse().expect("Invalid start of wavelet size range");
         let end: f64 = parts[1].trim().parse().expect("Invalid end of wavelet size range");
-        let num = 16;
+        let mut num = 0;
+        if !opt.filter {
+            num+=256;
+        } else {
+            num+=5;
+        }
         (0..num).map(|i| start + (end - start) * i as f64 / (num - 1) as f64).collect()
     } else {
         opt.wavelet_sizes
