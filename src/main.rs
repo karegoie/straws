@@ -154,12 +154,13 @@ fn process_sequence_fasta(
     let threshold = match opt.threshold {
         Some(t) => t,
         None => {
-            let mut sorted_diversity = shannon_diversity.clone();
-            sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let index = (sorted_diversity.len() as f64 * 0.1).ceil() as usize;
-            let threshold = sorted_diversity[index.min(sorted_diversity.len() - 1)];
-            info!("Calculated threshold: {}", threshold);
-            threshold
+            // let mut sorted_diversity = shannon_diversity.clone();
+            // sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            // let index = (sorted_diversity.len() as f64 * 0.03).ceil() as usize;
+            // let threshold = sorted_diversity[index.min(sorted_diversity.len() - 1)];
+            // info!("Calculated threshold: {}", threshold);
+            // threshold
+            0.33255
         },
     };
     let mut in_low_diversity_region = false;
@@ -520,7 +521,7 @@ fn main() -> Result<(), std::io::Error> {
                 None => {
                     let mut sorted_diversity = results_locked.iter().map(|d| d.diversity).collect::<Vec<_>>();
                     sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                    let index = (sorted_diversity.len() as f64 * 0.1).ceil() as usize;
+                    let index = (sorted_diversity.len() as f64 * 0.03).ceil() as usize;
                     let threshold = sorted_diversity[index.min(sorted_diversity.len() - 1)];
                     info!("Calculated threshold: {}", threshold);
                     threshold
