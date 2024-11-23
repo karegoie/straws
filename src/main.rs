@@ -205,7 +205,7 @@ fn process_sequence_fasta(
         let mean_diversity = sum_diversity / region_length as f64;
         let repeat_length = (end_pos as isize - start_pos as isize).abs();
         // Write BED entry
-        if repeat_length as f64 >= cwt::OMEGA_0 {
+        if repeat_length as f64 >= cwt::OMEGA_0{
             let mut bed_writer = bed_writer.lock().unwrap();
             writeln!(
                 bed_writer,
