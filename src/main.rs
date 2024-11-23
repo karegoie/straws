@@ -184,7 +184,7 @@ fn process_sequence_fasta(
                 let mean_diversity = sum_diversity / region_length as f64;
                 let repeat_length = (end_pos as isize - start_pos as isize).abs();
                 // Write BED entry
-                if repeat_length as f64 >= cwt::OMEGA_0 {
+                if repeat_length as f64 >= std::cmp::max(cwt::OMEGA_0 as usize, *params.periods.first().unwrap() as usize) as f64 {
                     let mut bed_writer = bed_writer.lock().unwrap();
                     writeln!(
                         bed_writer,
@@ -205,7 +205,7 @@ fn process_sequence_fasta(
         let mean_diversity = sum_diversity / region_length as f64;
         let repeat_length = (end_pos as isize - start_pos as isize).abs();
         // Write BED entry
-        if repeat_length as f64 >= cwt::OMEGA_0{
+        if repeat_length as f64 >= std::cmp::max(cwt::OMEGA_0 as usize,*params.periods.first().unwrap() as usize) as f64 {
             let mut bed_writer = bed_writer.lock().unwrap();
             writeln!(
                 bed_writer,
@@ -447,7 +447,7 @@ fn process_sequence_fastq(
 /// Entry point of the application.
 fn main() -> Result<(), std::io::Error> {
     // Initialize the logger
-    logger::init_logger(LevelFilter::Info).expect("Failed to initialize logger");
+    logger::init_logger(LevelFilter::Debug).expect("Failed to initialize logger");
 
     info!("Starting the STRAWS application.");
     let opt = Opt::from_args();
@@ -462,7 +462,7 @@ fn main() -> Result<(), std::io::Error> {
         let end: f64 = parts[1].trim().parse().expect("Invalid end of wavelet size range");
         let mut num = 0;
         if !opt.filter {
-            num+=256;
+            num+=16;
         } else {
             num+=5;
         }

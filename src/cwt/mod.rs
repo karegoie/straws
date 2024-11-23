@@ -146,7 +146,7 @@ pub struct CwtIterator {
 
 impl CwtIterator {
     pub fn new(seq: &mut Vec<u8>, opt: &Params) -> Self {
-        let signal = super::seq::convert_to_signal(seq);
+        let signal = &super::seq::convert_to_signal(seq)[super::seq::PAD..];
         let opt_clone = opt.clone();
 
         let mem = mem_info().expect("Failed to get memory info");
@@ -168,7 +168,7 @@ impl CwtIterator {
         };
 
         CwtIterator {
-            signal,
+            signal: signal.to_vec(),
             opt: opt_clone,
             current_batch: 0,
             batch_size: fbatch_size,
@@ -198,9 +198,9 @@ impl Iterator for CwtIterator {
         let end = std::cmp::min(start + self.batch_size, self.signal.len());
         let f = self.signal[start..end].to_vec();
 
-        let mut batch_cwt = cwt_perform(&f, &self.opt);
+        let batch_cwt = cwt_perform(&f, &self.opt);
         debug!("{:?}", batch_cwt);
-        _standardize(&mut batch_cwt); // Optional
+        //_standardize(&mut batch_cwt); // Optional
         self.current_batch += 1;
         debug!("{:?}", batch_cwt);
         Some(batch_cwt) // Return period list

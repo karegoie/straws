@@ -5,6 +5,8 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+pub const PAD: usize = 1000;
+
 struct Converter;
 trait Convert {
     fn convert(&self, value: u8) -> Complex<f64>; // Vec<bool>
@@ -27,7 +29,7 @@ pub fn convert_to_signal(sequence: &Vec<u8>) -> Vec<Complex<f64>> {
     let chunk_size = 1024;
     use std::sync::Mutex;
 
-    let signal = Mutex::new(vec![Complex::new(0.0, 0.0); sequence.len()]);
+    let signal = Mutex::new(vec![Complex::new(0.0, 0.0); sequence.len()+PAD]);
     
     sequence.chunks(chunk_size)
         .enumerate()
