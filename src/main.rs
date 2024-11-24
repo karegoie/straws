@@ -462,7 +462,7 @@ fn main() -> Result<(), std::io::Error> {
         let end: f64 = parts[1].trim().parse().expect("Invalid end of wavelet size range");
         let mut num = 0;
         if !opt.filter {
-            num+=64;
+            num+=16;
         } else {
             num+=5;
         }
