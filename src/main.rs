@@ -160,52 +160,75 @@ fn process_sequence_fasta(
             let threshold = sorted_diversity[index.min(sorted_diversity.len() - 1)];
             info!("Calculated threshold: {}", threshold);
             threshold
-            //0.33255
         },
     };
+    
+    let min_repeat_length = std::cmp::max(cwt::OMEGA_0 as usize, *params.periods.first().unwrap() as usize);
+    
+    let mut binary_signal: Vec<bool> = shannon_diversity.iter().map(|&diversity| diversity < threshold).collect();
+    
+    let kernel_size = 3;
+    let half_kernel = kernel_size / 2;
+    
+    let mut dilated_signal = binary_signal.clone();
+    for i in half_kernel..(binary_signal.len() - half_kernel) {
+        let window = &binary_signal[(i - half_kernel)..=(i + half_kernel)];
+        if window.iter().any(|&x| x) {
+            dilated_signal[i] = true;
+        }
+    }
+    
+    let mut processed_signal = dilated_signal.clone();
+    for i in half_kernel..(dilated_signal.len() - half_kernel) {
+        let window = &dilated_signal[(i - half_kernel)..=(i + half_kernel)];
+        if window.iter().all(|&x| x) {
+            processed_signal[i] = true;
+        } else {
+            processed_signal[i] = false;
+        }
+    }
+    
     let mut in_low_diversity_region = false;
     let mut start_pos = 0;
     let mut sum_diversity = 0.0;
     let mut region_length = 0;
-    for (i, &diversity) in shannon_diversity.iter().enumerate() {
-        if diversity < threshold {
+    
+    for (i, &is_low) in processed_signal.iter().enumerate() {
+        if is_low {
             if !in_low_diversity_region {
                 in_low_diversity_region = true;
                 start_pos = i;
-                sum_diversity = diversity;
+                sum_diversity = shannon_diversity[i];
                 region_length = 1;
             } else {
-                sum_diversity += diversity;
+                sum_diversity += shannon_diversity[i];
                 region_length += 1;
             }
-        } else {
-            if in_low_diversity_region {
-                let end_pos = i;
-                let mean_diversity = sum_diversity / region_length as f64;
-                let repeat_length = (end_pos as isize - start_pos as isize).abs();
-                // Write BED entry
-                if repeat_length as f64 >= std::cmp::max(cwt::OMEGA_0 as usize, *params.periods.first().unwrap() as usize) as f64 {
-                    let mut bed_writer = bed_writer.lock().unwrap();
-                    writeln!(
-                        bed_writer,
-                        "{}\t{}\t{}\tl={};s={:.4e}",
-                        id,
-                        start_pos,
-                        end_pos,
-                        repeat_length,
-                        mean_diversity,
-                    )?;
-                    in_low_diversity_region = false;
-                }
+        } else if in_low_diversity_region {
+            let end_pos = i;
+            let mean_diversity = sum_diversity / region_length as f64;
+            let repeat_length = end_pos - start_pos;
+            if repeat_length >= min_repeat_length {
+                let mut bed_writer = bed_writer.lock().unwrap();
+                writeln!(
+                    bed_writer,
+                    "{}\t{}\t{}\tl={};s={:.4e}",
+                    id,
+                    start_pos,
+                    end_pos,
+                    repeat_length,
+                    mean_diversity,
+                )?;
             }
+            in_low_diversity_region = false;
         }
     }
+    
     if in_low_diversity_region {
-        let end_pos = shannon_diversity.len();
+        let end_pos = processed_signal.len();
         let mean_diversity = sum_diversity / region_length as f64;
-        let repeat_length = (end_pos as isize - start_pos as isize).abs();
-        // Write BED entry
-        if repeat_length as f64 >= std::cmp::max(cwt::OMEGA_0 as usize,*params.periods.first().unwrap() as usize) as f64 {
+        let repeat_length = end_pos - start_pos;
+        if repeat_length >= min_repeat_length {
             let mut bed_writer = bed_writer.lock().unwrap();
             writeln!(
                 bed_writer,
@@ -217,7 +240,7 @@ fn process_sequence_fasta(
                 mean_diversity,
             )?;
         }
-    }
+    }    
 
     info!("Processed sequence ID: {}", id);
     Ok(())
