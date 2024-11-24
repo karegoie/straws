@@ -156,7 +156,7 @@ fn process_sequence_fasta(
         None => {
             let mut sorted_diversity = shannon_diversity.clone();
             sorted_diversity.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let index = (sorted_diversity.len() as f64 * 0.5).ceil() as usize;
+            let index = (sorted_diversity.len() as f64 * 0.25).ceil() as usize;
             let threshold = sorted_diversity[index.min(sorted_diversity.len() - 1)];
             info!("Calculated threshold: {}", threshold);
             threshold
@@ -165,8 +165,8 @@ fn process_sequence_fasta(
     
     let min_repeat_length = std::cmp::max(cwt::OMEGA_0 as usize, *params.periods.first().unwrap() as usize);
     
-    let mut binary_signal: Vec<bool> = shannon_diversity.iter().map(|&diversity| diversity < threshold).collect();
-    
+    let binary_signal: Vec<bool> = shannon_diversity.iter().map(|&diversity| diversity < threshold).collect();
+
     let kernel_size = 3;
     let half_kernel = kernel_size / 2;
     
