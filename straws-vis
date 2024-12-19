@@ -65,7 +65,7 @@ def plot_cwt(cwt_matrix, start, end, output_path):
         logging.info("Plotting entire CWT matrix")
         data_to_plot = cwt_matrix.T[::-1]
 
-    plt.imshow(data_to_plot, cmap='viridis', aspect='auto', interpolation='none')
+    plt.imshow(data_to_plot, cmap='viridis', aspect='auto')
     plt.colorbar(label='CWT Value')
     plt.xlabel('Genomic Position (bp)')
     plt.ylabel('Wavelet Size')
