@@ -45,9 +45,9 @@ def parse_arguments():
     return parser.parse_args()
 
 def load_cwt_matrix(cwt_path):
-    """Load the CWT matrix from a .cwt file and reshape to (16, -1)."""
+    """Load the CWT matrix from a .cwt file and reshape to (-1, 16)."""
     try:
-        cwt_matrix = np.fromfile(cwt_path, dtype='<f8').reshape(16, -1)
+        cwt_matrix = np.fromfile(cwt_path, dtype='<f8').reshape(-1, 16)
         logging.info(f"CWT matrix loaded with shape {cwt_matrix.shape}")
         return cwt_matrix
     except Exception as e:
