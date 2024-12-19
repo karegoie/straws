@@ -44,21 +44,10 @@ def parse_arguments():
     )
     return parser.parse_args()
 
-def load_configuration(conf_path):
-    """Load the shape configuration from a .conf file."""
+def load_cwt_matrix(cwt_path):
+    """Load the CWT matrix from a .cwt file and reshape to (16, -1)."""
     try:
-        shape = np.loadtxt(conf_path, delimiter=',', max_rows=1, dtype=object)
-        shape = [int(n) for n in shape[1:]]
-        logging.info(f"Loaded shape: {shape}")
-        return shape
-    except Exception as e:
-        logging.error(f"Failed to load configuration from {conf_path}: {e}")
-        sys.exit(1)
-
-def load_cwt_matrix(cwt_path, shape):
-    """Load the CWT matrix from a .cwt file."""
-    try:
-        cwt_matrix = np.fromfile(cwt_path, dtype='<f8').reshape(shape)
+        cwt_matrix = np.fromfile(cwt_path, dtype='<f8').reshape(16, -1)
         logging.info(f"CWT matrix loaded with shape {cwt_matrix.shape}")
         return cwt_matrix
     except Exception as e:
@@ -95,19 +84,14 @@ def main():
         sys.exit(1)
     
     base_name = input_path.stem
-    conf_file = Path(f"./{base_name}.conf")
     cwt_file = Path(f"./{base_name}.cwt")
     
-    if not conf_file.exists():
-        logging.error(f"Configuration file {conf_file} does not exist.")
-        sys.exit(1)
     if not cwt_file.exists():
         logging.error(f"CWT file {cwt_file} does not exist.")
         sys.exit(1)
 
     # Load data
-    shape = load_configuration(conf_file)
-    cwt_matrix = load_cwt_matrix(cwt_file, shape)
+    cwt_matrix = load_cwt_matrix(cwt_file)
 
     # Determine plotting range
     if args.start and args.end:

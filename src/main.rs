@@ -33,7 +33,7 @@ struct Opt {
     #[structopt(short, long)]  
     filter: bool,
 
-    /// No .cwt file for visualize
+    /// Yes .cwt file for visualize
     #[structopt(short)]
     cwt: bool,
 
