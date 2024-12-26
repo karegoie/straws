@@ -60,10 +60,10 @@ def plot_cwt(cwt_matrix, start, end, output_path):
     
     if start is not None and end is not None:
         logging.info(f"Plotting columns from {start} to {end}")
-        data_to_plot = cwt_matrix.T[:, start-1:end][::-1, ::-1]
+        data_to_plot = cwt_matrix.T[:, start-1:end][::-1]
     else:
         logging.info("Plotting entire CWT matrix")
-        data_to_plot = cwt_matrix.T[::-1, ::-1]
+        data_to_plot = cwt_matrix.T[::-1]
 
     plt.imshow(data_to_plot, cmap='viridis', aspect='auto')
     plt.colorbar(label='CWT Value')
